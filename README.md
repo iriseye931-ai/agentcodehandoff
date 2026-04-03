@@ -132,6 +132,7 @@ Open the live terminal dashboard. Use the default view for coordination and the 
 ```bash
 agentcodehandoff-dashboard
 agentcodehandoff dashboard --view ops
+agentcodehandoff ops-next
 ```
 
 Send a handoff:
@@ -395,6 +396,13 @@ Save reusable bridge presets and apply them later:
 ```bash
 agentcodehandoff bridge-preset-save --name local-pair --agents codex hermes
 agentcodehandoff bridge-preset-apply --name local-pair --start
+```
+
+Ask the tool for the single most important next ops action:
+
+```bash
+agentcodehandoff ops-next
+agentcodehandoff ops-next --apply
 ```
 
 Apply a safe remediation automatically:

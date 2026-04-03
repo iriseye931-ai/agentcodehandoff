@@ -1050,6 +1050,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff bridge-preset-apply "$@"\n'
     elif kind == "bridge-preset-delete":
         command = 'exec agentcodehandoff bridge-preset-delete "$@"\n'
+    elif kind == "ops-next":
+        command = 'exec agentcodehandoff ops-next "$@"\n'
     elif kind == "bridge-profile-show":
         command = 'exec agentcodehandoff bridge-profile-show "$@"\n'
     elif kind == "bridge-profile-delete":
@@ -1133,7 +1135,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1532,6 +1534,87 @@ def _ops_request_rows(request_records: list[dict[str, Any]], width: int, limit: 
         if len(rows) >= limit:
             break
     return rows
+
+
+def _ops_actions(home: Path, inbox_path: Path, claims_path: Path, sessions_path: Path) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    messages = _read_messages(inbox_path)
+    claims = _read_claims(claims_path)
+    sessions = _read_sessions(sessions_path)
+    request_records = _request_records(messages)
+
+    for agent in ("codex", "hermes"):
+        status = _supervised_bridge_status(home, inbox_path, agent)
+        has_bridge_context = bool(status.get("failure_class")) or bool(status.get("lock")) or bool(status.get("profile"))
+        if has_bridge_context and not bool(status.get("healthy")) and (bool(status.get("failure_class")) or not bool(status.get("alive")) or bool(status.get("lock", {}).get("paused", False))):
+            actions.append(
+                {
+                    "priority": 100,
+                    "kind": "bridge-recover",
+                    "summary": f"Recover {agent} bridge",
+                    "detail": _bridge_supervision_line(status, 120),
+                    "agent": agent,
+                }
+            )
+
+    for record in request_records:
+        state = str(record.get("state", "")).strip()
+        if state in {"stale", "acknowledged"}:
+            request = record["request"]
+            actions.append(
+                {
+                    "priority": 80 if state == "stale" else 60,
+                    "kind": "request-sweep",
+                    "summary": f"Recover {state} request {request.get('summary', '')}",
+                    "detail": _request_status_line(record, 120),
+                    "agent": str(request.get("from", "")).strip(),
+                }
+            )
+        elif state in {"blocked", "escalated"}:
+            request = record["request"]
+            actions.append(
+                {
+                    "priority": 70,
+                    "kind": "request-resolve",
+                    "summary": f"Resolve {state} request {request.get('summary', '')}",
+                    "detail": _request_status_line(record, 120),
+                    "request_id": str(record.get("request_id", "")).strip(),
+                }
+            )
+
+    open_claims = _open_claims(claims)
+    for index, claim in enumerate(open_claims):
+        remaining = open_claims[:index] + open_claims[index + 1 :]
+        conflicts = _claim_conflicts(remaining, claim)
+        if conflicts:
+            actions.append(
+                {
+                    "priority": 50,
+                    "kind": "claim-conflict",
+                    "summary": f"Review claim conflict for {claim.get('agent', '?')}::{claim.get('scope', '')}",
+                    "detail": _conflict_lines(claims, 120, limit=1)[0],
+                    "agent": str(claim.get("agent", "")).strip(),
+                    "scope": str(claim.get("scope", "")).strip(),
+                }
+            )
+            break
+
+    for session in _active_sessions(sessions):
+        drift = _session_drift(session, claims)
+        if drift["status"] in {"drift", "unscoped", "missing"}:
+            actions.append(
+                {
+                    "priority": 40,
+                    "kind": "session-drift",
+                    "summary": f"Review drift for {session.get('agent', '?')}::{session.get('scope', '')}",
+                    "detail": _session_drift_summary_line(session, drift, 120),
+                    "agent": str(session.get("agent", "")).strip(),
+                    "scope": str(session.get("scope", "")).strip(),
+                }
+            )
+
+    actions.sort(key=lambda item: int(item.get("priority", 0) or 0), reverse=True)
+    return actions
 
 
 def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) -> list[str]:
@@ -3047,6 +3130,75 @@ def cmd_bridge_recover(args: argparse.Namespace) -> None:
         raise SystemExit("no bridges required recovery")
 
 
+def cmd_ops_next(args: argparse.Namespace) -> None:
+    actions = _ops_actions(args.home, args.inbox_path, args.claims_path, args.sessions_path)
+    if not actions:
+        print("no actionable ops issues")
+        return
+    action = actions[0]
+    print(f"next: {action.get('summary', '')}")
+    print(f"kind: {action.get('kind', '')}")
+    print(f"priority: {action.get('priority', 0)}")
+    detail = str(action.get("detail", "")).strip()
+    if detail:
+        print(f"detail: {detail}")
+
+    if not args.apply:
+        return
+
+    kind = str(action.get("kind", "")).strip()
+    if kind == "bridge-recover":
+        recover_args = argparse.Namespace(
+            home=args.home,
+            inbox_path=args.inbox_path,
+            claims_path=args.claims_path,
+            sessions_path=args.sessions_path,
+            agents=[str(action.get("agent", "")).strip()],
+            repo=args.repo,
+            interval=args.interval,
+            claim_on_files=args.claim_on_files,
+            claim_scope_prefix=args.claim_scope_prefix,
+            verbose=args.verbose,
+            timeout=args.timeout,
+            auto_sweep=args.auto_sweep,
+            sweep_interval=args.sweep_interval,
+            max_restarts=args.max_restarts,
+            cool_off_seconds=args.cool_off_seconds,
+            force=args.force,
+            fail_if_idle=False,
+        )
+        cmd_bridge_recover(recover_args)
+        return
+
+    if kind == "request-sweep":
+        sweep_args = argparse.Namespace(
+            inbox_path=args.inbox_path,
+            agent=str(action.get("agent", "")).strip() or None,
+            limit=args.limit,
+            dry_run=False,
+        )
+        cmd_request_sweep(sweep_args)
+        return
+
+    if kind == "request-resolve":
+        if not args.resolve_action:
+            raise SystemExit("ops-next --apply for request-resolve requires --resolve-action approve|close|escalate")
+        resolve_args = argparse.Namespace(
+            inbox_path=args.inbox_path,
+            request_id=str(action.get("request_id", "")).strip(),
+            action=args.resolve_action,
+            from_agent="",
+            to_agent="",
+            summary="",
+            details="",
+            task="",
+        )
+        cmd_request_resolve(resolve_args)
+        return
+
+    print("no safe auto-apply for this action type")
+
+
 def cmd_supervise(args: argparse.Namespace) -> None:
     lock_path = _bridge_lock_path(args.home, args.agent)
     existing = _read_bridge_lock(lock_path)
@@ -3480,6 +3632,23 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_recover_parser.add_argument("--force", action="store_true", help="restart even if the bridge does not appear degraded")
     bridge_recover_parser.add_argument("--fail-if-idle", action="store_true", help="exit non-zero when no bridges needed recovery")
     bridge_recover_parser.set_defaults(func=cmd_bridge_recover)
+
+    ops_next_parser = subparsers.add_parser("ops-next", help="show the highest-priority operational issue and optionally apply the safest fix")
+    ops_next_parser.add_argument("--apply", action="store_true", help="apply the safest built-in remediation for the top issue")
+    ops_next_parser.add_argument("--resolve-action", choices=["approve", "close", "escalate"], help="required when the top issue is a request resolution")
+    ops_next_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="fallback repo for bridge recovery")
+    ops_next_parser.add_argument("--interval", type=float, default=2.0)
+    ops_next_parser.add_argument("--claim-on-files", action="store_true")
+    ops_next_parser.add_argument("--claim-scope-prefix", default="auto-")
+    ops_next_parser.add_argument("--verbose", action="store_true")
+    ops_next_parser.add_argument("--timeout", type=float, default=3.0)
+    ops_next_parser.add_argument("--auto-sweep", action="store_true")
+    ops_next_parser.add_argument("--sweep-interval", type=float, default=30.0)
+    ops_next_parser.add_argument("--max-restarts", type=int, default=5)
+    ops_next_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS)
+    ops_next_parser.add_argument("--force", action="store_true")
+    ops_next_parser.add_argument("--limit", type=int, default=20)
+    ops_next_parser.set_defaults(func=cmd_ops_next)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")
     dashboard_parser.add_argument("--interval", type=float, default=2.0)
