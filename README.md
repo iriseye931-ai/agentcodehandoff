@@ -77,6 +77,12 @@ agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 ```
 
+Check whether the bridges appear alive:
+
+```bash
+agentcodehandoff auto-status
+```
+
 Send a handoff:
 
 ```bash
@@ -84,6 +90,17 @@ agentcodehandoff-codex-send \
   --summary "Need a realism pass" \
   --details "Own MeshGraph.tsx only" \
   --files "frontend/src/components/MeshGraph.tsx"
+```
+
+Send an auto-reply request:
+
+```bash
+agentcodehandoff request \
+  --from-agent codex \
+  --to-agent hermes \
+  --summary "Need a quick review" \
+  --details "Reply automatically with short feedback." \
+  --files "README.md"
 ```
 
 Claim a scope:
@@ -104,6 +121,7 @@ agentcodehandoff read --agent codex
 agentcodehandoff watch --agent hermes
 agentcodehandoff latest --agent hermes
 agentcodehandoff status
+agentcodehandoff auto-status
 agentcodehandoff claims
 ```
 
@@ -154,6 +172,7 @@ Example:
 ```bash
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
+agentcodehandoff auto-status
 ```
 
 Notes:
@@ -161,6 +180,8 @@ Notes:
 - this works only in a real terminal environment where Hermes and Codex can reach their providers
 - it is not expected to work inside a restricted offline sandbox
 - the auto bridge only replies to messages addressed to that agent
+- auto bridges only respond to `request`, `task`, and `auto-request` roles
+- plain `handoff` messages are informational and do not auto-trigger replies
 
 ## Configuration
 

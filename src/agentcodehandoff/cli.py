@@ -18,6 +18,7 @@ DEFAULT_INBOX_PATH = DEFAULT_HOME / "inbox.jsonl"
 DEFAULT_CLAIMS_PATH = DEFAULT_HOME / "claims.json"
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
+AUTOMATION_STALE_SECONDS = 30
 
 
 def _now_iso() -> str:
@@ -87,17 +88,24 @@ def _automation_state_path(home: Path, agent: str) -> Path:
 
 def _read_automation_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"seen_ids": []}
+        return {"seen_ids": [], "last_poll_at": "", "last_reply_at": "", "last_error": ""}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {"seen_ids": []}
-    return data if isinstance(data, dict) else {"seen_ids": []}
+        return {"seen_ids": [], "last_poll_at": "", "last_reply_at": "", "last_error": ""}
+    return data if isinstance(data, dict) else {"seen_ids": [], "last_poll_at": "", "last_reply_at": "", "last_error": ""}
 
 
 def _write_automation_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def _read_messages(path: Path) -> list[dict[str, Any]]:
@@ -378,6 +386,25 @@ def _print_check(level: str, label: str, detail: str) -> None:
     print(f"      {detail}")
 
 
+def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
+    last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
+    last_reply = _parse_iso(str(state.get("last_reply_at", "")).strip())
+    now = datetime.now(timezone.utc)
+    is_alive = last_poll is not None and (now - last_poll).total_seconds() <= AUTOMATION_STALE_SECONDS
+    print(f"{agent}: {'alive' if is_alive else 'stale'}")
+    if last_poll:
+        print(f"  last poll: {_format_timestamp(last_poll.isoformat())}")
+    if last_reply:
+        print(f"  last reply: {_format_timestamp(last_reply.isoformat())}")
+    last_error = str(state.get("last_error", "")).strip()
+    if last_error:
+        print(f"  last error: {last_error}")
+    seen_ids = state.get("seen_ids", [])
+    if isinstance(seen_ids, list):
+        print(f"  seen ids: {len(seen_ids)}")
+    print()
+
+
 def cmd_read(args: argparse.Namespace) -> None:
     messages = _filter_messages(_read_messages(args.inbox_path), args.agent, args.limit)
     for message in messages:
@@ -391,6 +418,22 @@ def cmd_latest(args: argparse.Namespace) -> None:
 
 
 def cmd_send(args: argparse.Namespace) -> None:
+    record = _write_message(
+        args.inbox_path,
+        {
+            "from": args.from_agent,
+            "to": args.to_agent,
+            "role": args.role,
+            "task": args.task,
+            "summary": args.summary,
+            "details": args.details,
+            "files": _split_files(args.files or ""),
+        },
+    )
+    _print_message(record)
+
+
+def cmd_request(args: argparse.Namespace) -> None:
     record = _write_message(
         args.inbox_path,
         {
@@ -519,6 +562,8 @@ def cmd_auto(args: argparse.Namespace) -> None:
     seen_ids = {str(item) for item in state.get("seen_ids", [])}
 
     while True:
+        state["last_poll_at"] = _now_iso()
+        _write_automation_state(state_path, state)
         messages = _read_messages(args.inbox_path)
         pending = _pending_messages_for_agent(messages, args.agent, seen_ids)
         for message in pending:
@@ -526,9 +571,11 @@ def cmd_auto(args: argparse.Namespace) -> None:
             prompt = _agent_prompt(args.agent, args.repo, message)
             try:
                 response = _run_auto_agent(args.agent, prompt, args.repo)
+                state["last_error"] = ""
             except Exception as exc:
                 if args.verbose:
                     print(f"auto-reply error for {message_id}: {exc}", file=sys.stderr)
+                state["last_error"] = str(exc)[:500]
                 seen_ids.add(message_id)
                 state["seen_ids"] = sorted(seen_ids)
                 _write_automation_state(state_path, state)
@@ -553,11 +600,20 @@ def cmd_auto(args: argparse.Namespace) -> None:
                 _print_message(record)
             seen_ids.add(message_id)
             state["seen_ids"] = sorted(seen_ids)
+            state["last_reply_at"] = _now_iso()
             _write_automation_state(state_path, state)
 
         if args.once:
             return
         time.sleep(args.interval)
+
+
+def cmd_auto_status(args: argparse.Namespace) -> None:
+    print("Auto bridges")
+    print()
+    for agent in args.agents:
+        state = _read_automation_state(_automation_state_path(args.home, agent))
+        _print_bridge_state(agent, state)
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -689,6 +745,10 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--verbose", action="store_true")
     auto_parser.set_defaults(func=cmd_auto)
 
+    auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
+    auto_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    auto_status_parser.set_defaults(func=cmd_auto_status)
+
     read_parser = subparsers.add_parser("read", help="read recent agent messages")
     read_parser.add_argument("--agent", help="filter messages by agent name")
     read_parser.add_argument("--limit", type=int, default=20)
@@ -718,6 +778,16 @@ def build_parser() -> argparse.ArgumentParser:
     send_parser.add_argument("--role", default="handoff")
     send_parser.add_argument("--files", default="", help="comma-separated file list")
     send_parser.set_defaults(func=cmd_send)
+
+    request_parser = subparsers.add_parser("request", help="send a message that auto bridges will respond to")
+    request_parser.add_argument("--from-agent", required=True)
+    request_parser.add_argument("--to-agent", required=True)
+    request_parser.add_argument("--summary", required=True)
+    request_parser.add_argument("--details", default="")
+    request_parser.add_argument("--task", default="shared task")
+    request_parser.add_argument("--role", default="request")
+    request_parser.add_argument("--files", default="", help="comma-separated file list")
+    request_parser.set_defaults(func=cmd_request)
 
     claim_parser = subparsers.add_parser("claim", help="claim ownership of a scope or file set")
     claim_parser.add_argument("--agent", required=True)
