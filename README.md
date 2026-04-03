@@ -232,6 +232,12 @@ Inspect request lifecycle state:
 agentcodehandoff requests
 ```
 
+Sweep stale requests and apply timeout actions:
+
+```bash
+agentcodehandoff request-sweep
+```
+
 Apply a safe remediation automatically:
 
 ```bash
@@ -262,6 +268,7 @@ agentcodehandoff sessions
 agentcodehandoff drift
 agentcodehandoff suggest
 agentcodehandoff requests
+agentcodehandoff request-sweep
 agentcodehandoff remediate --agent codex --scope parser-pass
 agentcodehandoff bridge-status
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
@@ -288,6 +295,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-drift`
 - `agentcodehandoff-suggest`
 - `agentcodehandoff-requests`
+- `agentcodehandoff-request-sweep`
 - `agentcodehandoff-remediate`
 - `agentcodehandoff-bridge-status`
 - `agentcodehandoff-codex-watch`
@@ -340,6 +348,7 @@ It shows:
 - safe remediation helpers for claim expansion and handoff generation
 - split-work remediation that can create a new claim and optional session
 - request lifecycle tracking with pending, acknowledged, stale, and outcome states
+- stale-request sweep for reminders and reroutes
 
 ## Worktree Sessions
 

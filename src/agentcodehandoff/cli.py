@@ -225,6 +225,7 @@ def _write_message(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "summary": payload["summary"],
         "details": payload.get("details", ""),
         "files": payload.get("files", []),
+        "request_id": payload.get("request_id", ""),
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
@@ -241,6 +242,7 @@ def _send_record(
     summary: str,
     details: str,
     files: str | list[str] | None,
+    request_id: str = "",
 ) -> dict[str, Any]:
     normalized_files = files if isinstance(files, list) else _split_files(files or "")
     return _write_message(
@@ -253,7 +255,7 @@ def _send_record(
             "summary": summary,
             "details": details,
             "files": normalized_files,
-            "request_id": "",
+            "request_id": request_id,
         },
     )
 
@@ -284,15 +286,25 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         request_to = str(request.get("to", "")).strip().lower()
         related_outcomes = [
             item for item in outcomes
-            if str(item.get("from", "")).strip().lower() == request_to
-            and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
-            and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+            if (
+                str(item.get("request_id", "")).strip() == request_id
+                or (
+                    str(item.get("from", "")).strip().lower() == request_to
+                    and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
+                    and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+                )
+            )
         ]
         related_handoffs = [
             item for item in handoffs
-            if str(item.get("from", "")).strip().lower() == request_to
-            and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
-            and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+            if (
+                str(item.get("request_id", "")).strip() == request_id
+                or (
+                    str(item.get("from", "")).strip().lower() == request_to
+                    and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
+                    and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+                )
+            )
         ]
         latest_outcome = related_outcomes[-1] if related_outcomes else None
         latest_handoff = related_handoffs[-1] if related_handoffs else None
@@ -862,6 +874,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff status "$@"\n'
     elif kind == "requests":
         command = 'exec agentcodehandoff requests "$@"\n'
+    elif kind == "request-sweep":
+        command = 'exec agentcodehandoff request-sweep "$@"\n'
     elif kind == "sessions":
         command = 'exec agentcodehandoff sessions "$@"\n'
     elif kind == "drift":
@@ -941,7 +955,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "requests", "sessions", "drift", "suggest", "remediate", "bridge-status"):
+    for kind in ("dashboard", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1246,6 +1260,36 @@ def _request_status_line(record: dict[str, Any], width: int) -> str:
     if isinstance(age_seconds, (int, float)):
         age_text = f"{int(age_seconds)}s"
     return _truncate(f"{sender}->{recipient} [{state}] {summary} ({age_text})", width)
+
+
+def _stale_request_actions(record: dict[str, Any]) -> list[dict[str, Any]]:
+    request = record["request"]
+    state = str(record.get("state", "pending"))
+    if state not in {"stale", "acknowledged"}:
+        return []
+    if state == "acknowledged":
+        return [
+            {
+                "type": "remind",
+                "to_agent": str(request.get("to", "")).strip(),
+                "message": f"Follow up with {request.get('to', '')} on acknowledged request `{request.get('summary', '')}`.",
+            }
+        ]
+    files = [str(item) for item in request.get("files", []) if str(item).strip()]
+    summary = str(request.get("summary", "")).strip()
+    details = str(request.get("details", "")).strip()
+    from_agent = str(request.get("from", "")).strip()
+    original_to = str(request.get("to", "")).strip()
+    target, _ = _recommend_agent(summary, details, files)
+    if target.lower() == original_to.lower():
+        target = "hermes" if original_to.lower() == "codex" else "codex"
+    return [
+        {
+            "type": "reroute",
+            "to_agent": target,
+            "message": f"Reroute stale request `{summary}` to {target}.",
+        }
+    ]
 
 
 def _render_panel(title: str, rows: list[str], width: int, height: int | None = None) -> list[str]:
@@ -1806,6 +1850,62 @@ def cmd_requests(args: argparse.Namespace) -> None:
         elif record.get("latest_handoff"):
             handoff = record["latest_handoff"]
             print(f"  acknowledged: {handoff.get('summary', '')}")
+        print()
+
+
+def cmd_request_sweep(args: argparse.Namespace) -> None:
+    records = _request_records(_read_messages(args.inbox_path))
+    stale_records = [record for record in records if str(record.get("state", "")) in {"stale", "acknowledged"}]
+    if args.agent:
+        needle = args.agent.lower()
+        stale_records = [
+            record for record in stale_records
+            if str(record["request"].get("from", "")).lower() == needle or str(record["request"].get("to", "")).lower() == needle
+        ]
+    stale_records = stale_records[-args.limit:]
+    if not stale_records:
+        print("no stale or acknowledged requests")
+        return
+    for record in stale_records:
+        request = record["request"]
+        print(_request_status_line(record, 120))
+        actions = _stale_request_actions(record)
+        if not actions:
+            print("  no action")
+            print()
+            continue
+        action = actions[0]
+        print(f"  plan: {action.get('message', '')}")
+        if args.dry_run:
+            print()
+            continue
+        request_id = str(request.get("id", "")).strip()
+        if action["type"] == "remind":
+            _send_record(
+                args.inbox_path,
+                from_agent=str(request.get("from", "")).strip() or "system",
+                to_agent=str(action.get("to_agent", "")).strip(),
+                role="request",
+                task=str(request.get("task", "")).strip() or "follow-up",
+                summary=f"Follow-up: {request.get('summary', '')}",
+                details=f"Reminder on acknowledged request: {request.get('summary', '')}",
+                files=request.get("files", []),
+                request_id=request_id,
+            )
+            print(f"  sent reminder to {action.get('to_agent', '')}")
+        elif action["type"] == "reroute":
+            _send_record(
+                args.inbox_path,
+                from_agent=str(request.get("from", "")).strip() or "system",
+                to_agent=str(action.get("to_agent", "")).strip(),
+                role="request",
+                task=str(request.get("task", "")).strip() or "rerouted request",
+                summary=f"Rerouted: {request.get('summary', '')}",
+                details=f"Original request to {request.get('to', '')} became stale and was rerouted.",
+                files=request.get("files", []),
+                request_id=request_id,
+            )
+            print(f"  rerouted to {action.get('to_agent', '')}")
         print()
 
 
@@ -2576,6 +2676,12 @@ def build_parser() -> argparse.ArgumentParser:
     requests_parser.add_argument("--agent", help="filter requests by from/to agent")
     requests_parser.add_argument("--limit", type=int, default=20)
     requests_parser.set_defaults(func=cmd_requests)
+
+    request_sweep_parser = subparsers.add_parser("request-sweep", help="dry-run or apply timeout actions for stale requests")
+    request_sweep_parser.add_argument("--agent", help="filter requests by from/to agent")
+    request_sweep_parser.add_argument("--limit", type=int, default=20)
+    request_sweep_parser.add_argument("--dry-run", action="store_true")
+    request_sweep_parser.set_defaults(func=cmd_request_sweep)
 
     send_parser = subparsers.add_parser("send", help="send an agent handoff")
     send_parser.add_argument("--from-agent", required=True)
