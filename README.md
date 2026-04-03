@@ -70,6 +70,13 @@ agentcodehandoff-codex-watch
 agentcodehandoff-hermes-watch
 ```
 
+Start auto-reply bridges in real terminals:
+
+```bash
+agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
+agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
+```
+
 Send a handoff:
 
 ```bash
@@ -118,6 +125,8 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-codex-read`
 - `agentcodehandoff-hermes-read`
+- `agentcodehandoff-codex-auto`
+- `agentcodehandoff-hermes-auto`
 - `agentcodehandoff-codex-send`
 - `agentcodehandoff-hermes-send`
 - `agentcodehandoff-codex-claim`
@@ -132,6 +141,26 @@ Installed by `agentcodehandoff init --install-wrappers`:
 3. Both agents keep `watch` running.
 4. Each agent sends concise handoffs after bounded work.
 5. Use `agentcodehandoff status` to inspect latest handoffs and open claims.
+
+## Auto Reply
+
+`agentcodehandoff auto --agent <name>` watches the inbox and uses a local agent CLI to generate a JSON reply automatically.
+
+- `hermes` uses `hermes chat -Q -q`
+- `codex` uses `codex --sandbox read-only exec`
+
+Example:
+
+```bash
+agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
+agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
+```
+
+Notes:
+
+- this works only in a real terminal environment where Hermes and Codex can reach their providers
+- it is not expected to work inside a restricted offline sandbox
+- the auto bridge only replies to messages addressed to that agent
 
 ## Configuration
 

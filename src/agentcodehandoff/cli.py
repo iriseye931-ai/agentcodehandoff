@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ DEFAULT_HOME = Path(os.environ.get(ENV_HOME, Path.home() / ".agentcodehandoff"))
 DEFAULT_INBOX_PATH = DEFAULT_HOME / "inbox.jsonl"
 DEFAULT_CLAIMS_PATH = DEFAULT_HOME / "claims.json"
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
+DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
 
 
 def _now_iso() -> str:
@@ -57,6 +59,47 @@ def _split_files(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        for index in range(start, len(text)):
+            char = text[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:index + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(parsed, dict):
+                        return parsed
+        start = text.find("{", start + 1)
+    return None
+
+
+def _automation_state_path(home: Path, agent: str) -> Path:
+    return home / "automation" / f"{agent}.json"
+
+
+def _read_automation_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"seen_ids": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"seen_ids": []}
+    return data if isinstance(data, dict) else {"seen_ids": []}
+
+
+def _write_automation_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
 def _read_messages(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -91,6 +134,103 @@ def _write_message(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
     return record
+
+
+def _pending_messages_for_agent(messages: list[dict[str, Any]], agent: str, seen_ids: set[str]) -> list[dict[str, Any]]:
+    needle = agent.strip().lower()
+    pending: list[dict[str, Any]] = []
+    for message in messages:
+        message_id = str(message.get("id", "")).strip()
+        if not message_id or message_id in seen_ids:
+            continue
+        recipient = str(message.get("to", "")).strip().lower()
+        sender = str(message.get("from", "")).strip().lower()
+        role = str(message.get("role", "")).strip().lower()
+        if recipient != needle:
+            continue
+        if sender == needle:
+            continue
+        if role not in {"request", "task", "auto-request"}:
+            continue
+        pending.append(message)
+    return pending
+
+
+def _agent_prompt(agent: str, repo: Path, message: dict[str, Any]) -> str:
+    files = message.get("files") or []
+    files_block = "\n".join(f"- {item}" for item in files) if files else "- none provided"
+    return (
+        f"You are {agent} responding inside AgentCodeHandoff for repo {repo}.\n"
+        "Return JSON only with this shape:\n"
+        '{"summary":"short summary","details":"concise technical response","files":["optional/path"]}\n'
+        "Do not include markdown fences or any extra text.\n"
+        "If you are only acknowledging receipt, keep it brief.\n\n"
+        f"From: {message.get('from', '')}\n"
+        f"Task: {message.get('task', '')}\n"
+        f"Summary: {message.get('summary', '')}\n"
+        f"Details: {message.get('details', '')}\n"
+        "Files:\n"
+        f"{files_block}\n"
+    )
+
+
+def _run_hermes_auto(prompt: str, repo: Path) -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            str(shutil.which("hermes") or "/Users/iris/.local/bin/hermes"),
+            "chat",
+            "-Q",
+            "--source",
+            "tool",
+            "-q",
+            prompt,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+    parsed = _extract_json_object(combined)
+    if not parsed:
+        raise RuntimeError(f"hermes automation did not return JSON: {combined.strip()[:500]}")
+    return parsed
+
+
+def _run_codex_auto(prompt: str, repo: Path) -> dict[str, Any]:
+    output_path = DEFAULT_HOME / "automation" / "codex-last-response.txt"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            str(shutil.which("codex") or "/opt/homebrew/bin/codex"),
+            "--sandbox",
+            "read-only",
+            "exec",
+            "--skip-git-repo-check",
+            "-C",
+            str(repo),
+            "-o",
+            str(output_path),
+            "-",
+        ],
+        input=prompt,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = (output_path.read_text(encoding="utf-8") if output_path.exists() else "") + "\n" + (result.stderr or "")
+    parsed = _extract_json_object(combined)
+    if not parsed:
+        raise RuntimeError(f"codex automation did not return JSON: {combined.strip()[:500]}")
+    return parsed
+
+
+def _run_auto_agent(agent: str, prompt: str, repo: Path) -> dict[str, Any]:
+    if agent == "hermes":
+        return _run_hermes_auto(prompt, repo)
+    if agent == "codex":
+        return _run_codex_auto(prompt, repo)
+    raise ValueError(f"unsupported auto agent: {agent}")
 
 
 def _read_claims(path: Path) -> list[dict[str, Any]]:
@@ -198,6 +338,8 @@ def _wrapper_script(kind: str, agent: str) -> str:
         command = f'exec agentcodehandoff watch --agent "{agent}" "$@"\n'
     elif kind == "read":
         command = f'exec agentcodehandoff read --agent "{agent}" "$@"\n'
+    elif kind == "auto":
+        command = f'exec agentcodehandoff auto --agent "{agent}" "$@"\n'
     elif kind == "claim":
         command = f'exec agentcodehandoff claim --agent "{agent}" "$@"\n'
     elif kind == "release":
@@ -220,7 +362,7 @@ def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
     for agent in ("codex", "hermes"):
-        for kind in ("watch", "read", "send", "claim", "release"):
+        for kind in ("watch", "read", "auto", "send", "claim", "release"):
             path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
             if path.exists() and not force:
                 wrappers.append(path)
@@ -371,6 +513,53 @@ def cmd_release(args: argparse.Namespace) -> None:
         print("claims released")
 
 
+def cmd_auto(args: argparse.Namespace) -> None:
+    state_path = _automation_state_path(args.home, args.agent)
+    state = _read_automation_state(state_path)
+    seen_ids = {str(item) for item in state.get("seen_ids", [])}
+
+    while True:
+        messages = _read_messages(args.inbox_path)
+        pending = _pending_messages_for_agent(messages, args.agent, seen_ids)
+        for message in pending:
+            message_id = str(message.get("id", "")).strip()
+            prompt = _agent_prompt(args.agent, args.repo, message)
+            try:
+                response = _run_auto_agent(args.agent, prompt, args.repo)
+            except Exception as exc:
+                if args.verbose:
+                    print(f"auto-reply error for {message_id}: {exc}", file=sys.stderr)
+                seen_ids.add(message_id)
+                state["seen_ids"] = sorted(seen_ids)
+                _write_automation_state(state_path, state)
+                continue
+
+            summary = str(response.get("summary", "")).strip() or f"{args.agent} reply"
+            details = str(response.get("details", "")).strip()
+            files = response.get("files") if isinstance(response.get("files"), list) else []
+            record = _write_message(
+                args.inbox_path,
+                {
+                    "from": args.agent,
+                    "to": str(message.get("from", "")).strip() or "codex",
+                    "role": "handoff",
+                    "task": str(message.get("task", "")).strip() or "auto-response",
+                    "summary": summary,
+                    "details": details,
+                    "files": [str(item) for item in files if str(item).strip()],
+                },
+            )
+            if args.verbose:
+                _print_message(record)
+            seen_ids.add(message_id)
+            state["seen_ids"] = sorted(seen_ids)
+            _write_automation_state(state_path, state)
+
+        if args.once:
+            return
+        time.sleep(args.interval)
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     _ensure_state(args.home, args.inbox_path, args.claims_path)
     created_messages: list[str] = []
@@ -491,6 +680,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="verify local setup and wrapper installation")
     doctor_parser.add_argument("--bin-dir", type=Path, default=DEFAULT_BIN_DIR, help="wrapper install directory")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    auto_parser = subparsers.add_parser("auto", help="watch the inbox and auto-reply using a local agent CLI")
+    auto_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    auto_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for the agent")
+    auto_parser.add_argument("--interval", type=float, default=2.0)
+    auto_parser.add_argument("--once", action="store_true", help="process pending messages once and exit")
+    auto_parser.add_argument("--verbose", action="store_true")
+    auto_parser.set_defaults(func=cmd_auto)
 
     read_parser = subparsers.add_parser("read", help="read recent agent messages")
     read_parser.add_argument("--agent", help="filter messages by agent name")
