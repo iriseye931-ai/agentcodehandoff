@@ -145,6 +145,59 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             capture_output=True,
         )
 
+    def write_bridge_profile(self, agent: str, *, repo: Path | None = None) -> Path:
+        path = self.home / "bridges" / f"{agent}.profile.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "agent": agent,
+                    "repo": str(repo or self.repo),
+                    "interval": 2.0,
+                    "claim_on_files": False,
+                    "claim_scope_prefix": "auto-",
+                    "auto_sweep": True,
+                    "sweep_interval": 30.0,
+                    "max_restarts": 5,
+                    "cool_off_seconds": 300.0,
+                    "updated_at": "2026-04-03T00:00:00+00:00",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def write_bridge_lock(self, agent: str, payload: dict[str, object]) -> Path:
+        path = self.home / "bridges" / f"{agent}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        return path
+
+    def wait_for_bridge_health(self, agent: str, *, timeout: float = 20.0) -> str:
+        deadline = time.time() + timeout
+        last_output = ""
+        while time.time() < deadline:
+            bridge_status = run_cli(["bridge-status"], env=self.env, cwd=self.repo)
+            self.assertEqual(bridge_status.returncode, 0, bridge_status.stdout + bridge_status.stderr)
+            last_output = bridge_status.stdout
+            if f"{agent}: healthy" in bridge_status.stdout:
+                return bridge_status.stdout
+            time.sleep(0.5)
+        self.fail(last_output)
+
+    def wait_for_all_bridge_health(self, agents: list[str], *, timeout: float = 20.0) -> str:
+        deadline = time.time() + timeout
+        last_output = ""
+        while time.time() < deadline:
+            bridge_status = run_cli(["bridge-status"], env=self.env, cwd=self.repo)
+            self.assertEqual(bridge_status.returncode, 0, bridge_status.stdout + bridge_status.stderr)
+            last_output = bridge_status.stdout
+            if all(f"{agent}: healthy" in bridge_status.stdout for agent in agents):
+                return bridge_status.stdout
+            time.sleep(0.5)
+        self.fail(last_output)
+
     def tearDown(self) -> None:
         try:
             run_cli(["down", "--template", "local-trio", "--repo", str(self.repo), "--force"], env=self.env)
@@ -214,6 +267,55 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("claude CLI is not ready", result.stderr)
         self.assertIn("agentcodehandoff doctor", result.stderr)
 
+    def test_bridge_stop_removes_stale_lock(self) -> None:
+        lock_path = self.write_bridge_lock(
+            "claude",
+            {
+                "agent": "claude",
+                "pid": 999999,
+                "supervisor_pid": 999998,
+                "repo": str(self.repo),
+                "paused": False,
+            },
+        )
+        result = run_cli(["bridge-stop", "--agent", "claude"], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("removed stale lock", result.stdout)
+        self.assertFalse(lock_path.exists())
+
+    def test_bridge_recover_starts_from_saved_profile_without_live_lock(self) -> None:
+        self.write_bridge_profile("claude")
+        result = run_cli(["bridge-recover", "--agents", "claude", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("started claude bridge", result.stdout)
+        self.wait_for_bridge_health("claude")
+
+    def test_bridge_recover_restarts_paused_stale_lock(self) -> None:
+        self.write_bridge_profile("claude")
+        self.write_bridge_lock(
+            "claude",
+            {
+                "agent": "claude",
+                "pid": 999999,
+                "supervisor_pid": 999998,
+                "repo": str(self.repo),
+                "paused": True,
+                "failure_class": "auth",
+                "interval": 2.0,
+                "claim_on_files": False,
+                "claim_scope_prefix": "auto-",
+                "auto_sweep": True,
+                "sweep_interval": 30.0,
+                "max_restarts": 5,
+                "cool_off_seconds": 300.0,
+            },
+        )
+        result = run_cli(["bridge-recover", "--agents", "claude", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("bridge process was not running; removed stale lock", result.stdout)
+        self.assertIn("started claude bridge", result.stdout)
+        self.wait_for_bridge_health("claude")
+
     def test_local_trio_starts_and_reports_healthy(self) -> None:
         init = run_cli(["init", "--install-wrappers", "--seed", "--bin-dir", str(self.bin_dir)], env=self.env)
         self.assertEqual(init.returncode, 0, init.stderr)
@@ -221,17 +323,9 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         up = run_cli(["up", "--template", "local-trio", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
         self.assertEqual(up.returncode, 0, up.stdout + up.stderr)
         self.assertIn("started claude bridge", up.stdout)
-
-        deadline = time.time() + 20
-        healthy = False
-        while time.time() < deadline:
-            bridge_status = run_cli(["bridge-status"], env=self.env, cwd=self.repo)
-            self.assertEqual(bridge_status.returncode, 0, bridge_status.stdout + bridge_status.stderr)
-            if "codex: healthy" in bridge_status.stdout and "hermes: healthy" in bridge_status.stdout and "claude: healthy" in bridge_status.stdout:
-                healthy = True
-                break
-            time.sleep(0.5)
-        self.assertTrue(healthy, bridge_status.stdout)
+        bridge_output = self.wait_for_all_bridge_health(["codex", "hermes", "claude"])
+        self.assertIn("codex: healthy", bridge_output)
+        self.assertIn("hermes: healthy", bridge_output)
 
         request = run_cli(
             [

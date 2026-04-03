@@ -530,10 +530,11 @@ The current suite covers:
 - availability overrides and routing fallback
 - bridge preset persistence for `local-trio`
 - bridge startup validation for missing agent CLIs and non-git repos
+- stale lock cleanup and paused-bridge recovery from saved profiles
 - supervised `local-trio` startup plus an actual Claude bridge reply in an isolated temp repo
 - tracked request resolution
 
-This is the current release-hardening baseline. Before a broad public release, the suite should continue to grow around long-running bridge supervision, restart policy behavior, and drift/remediation flows.
+This is the current release-hardening baseline. Before a broad public release, the suite should continue to grow around restart policy edge cases and deeper drift/remediation flows.
 
 ## Known Limitations
 
