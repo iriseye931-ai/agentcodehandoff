@@ -206,6 +206,12 @@ Inspect live drift against claimed files:
 agentcodehandoff drift
 ```
 
+Get actionable scope suggestions:
+
+```bash
+agentcodehandoff suggest
+```
+
 ## Core Commands
 
 ```bash
@@ -222,6 +228,7 @@ agentcodehandoff-status
 agentcodehandoff claims
 agentcodehandoff sessions
 agentcodehandoff drift
+agentcodehandoff suggest
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 ```
 
@@ -244,6 +251,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-status`
 - `agentcodehandoff-sessions`
 - `agentcodehandoff-drift`
+- `agentcodehandoff-suggest`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-codex-read`
@@ -290,6 +298,7 @@ It shows:
 - recent message traffic
 - active worktree sessions
 - file-awareness drift summaries
+- actionable suggestions for expand, split, or handoff decisions
 
 ## Worktree Sessions
 
@@ -316,6 +325,7 @@ Core commands:
 agentcodehandoff session-start --agent codex --scope parser-pass --repo /path/to/repo
 agentcodehandoff sessions
 agentcodehandoff drift
+agentcodehandoff suggest
 agentcodehandoff session-end --agent codex --scope parser-pass
 ```
 

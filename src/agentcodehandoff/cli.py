@@ -483,6 +483,80 @@ def _session_drift(session: dict[str, Any], claims: list[dict[str, Any]]) -> dic
     }
 
 
+def _claim_for_file(claims: list[dict[str, Any]], file_path: str, *, exclude_agent: str = "") -> dict[str, Any] | None:
+    for claim in _open_claims(claims):
+        claim_agent = str(claim.get("agent", "")).strip().lower()
+        if exclude_agent and claim_agent == exclude_agent.lower():
+            continue
+        declared_files = {str(item).strip() for item in claim.get("files", []) if str(item).strip()}
+        if file_path in declared_files:
+            return claim
+    return None
+
+
+def _extension_set(files: list[str]) -> set[str]:
+    extensions: set[str] = set()
+    for file_path in files:
+        suffix = Path(file_path).suffix.strip().lower()
+        if suffix:
+            extensions.add(suffix)
+    return extensions
+
+
+def _session_suggestions(session: dict[str, Any], drift: dict[str, Any], claims: list[dict[str, Any]]) -> list[str]:
+    status = str(drift.get("status", "")).strip()
+    changed_files = [str(item) for item in drift.get("changed_files", [])]
+    unexpected_files = [str(item) for item in drift.get("unexpected_files", [])]
+    claim = drift.get("claim")
+    claim_scope = str(claim.get("scope", "")).strip() if isinstance(claim, dict) else ""
+    session_agent = str(session.get("agent", "")).strip().lower()
+    suggestions: list[str] = []
+
+    if status == "clean":
+        return ["No action needed. Session is clean."]
+    if status == "aligned":
+        return ["Stay in the current claim. All changed files are within scope."]
+    if status == "missing":
+        return ["Worktree is missing. Recreate the session or close it with `session-end`."]
+    if status == "unscoped":
+        file_list = ", ".join(changed_files[:3]) if changed_files else "current changes"
+        return [f"Create or link a claim for {file_list} before continuing."]
+
+    owner_suggestions: list[str] = []
+    for file_path in unexpected_files:
+        owner_claim = _claim_for_file(claims, file_path, exclude_agent=session_agent)
+        if owner_claim:
+            owner_suggestions.append(
+                f"Handoff {file_path} to {owner_claim.get('agent', '?')} ({owner_claim.get('scope', '')})."
+            )
+
+    if owner_suggestions:
+        suggestions.extend(owner_suggestions)
+
+    declared_files = [str(item) for item in (claim.get("files", []) if isinstance(claim, dict) else []) if str(item).strip()]
+    declared_ext = _extension_set(declared_files)
+    unexpected_ext = _extension_set(unexpected_files)
+
+    if unexpected_files and not owner_suggestions:
+        if len(unexpected_files) <= 2 and (not declared_ext or unexpected_ext.issubset(declared_ext)):
+            if claim_scope:
+                suggestions.append(
+                    f"Expand claim `{claim_scope}` to include {', '.join(unexpected_files[:3])}."
+                )
+            else:
+                suggestions.append(
+                    f"Add a claim covering {', '.join(unexpected_files[:3])}."
+                )
+        else:
+            suggestions.append(
+                f"Split {', '.join(unexpected_files[:3])} into a new scope or separate session."
+            )
+
+    if not suggestions:
+        suggestions.append("Review changed files and either expand the claim or split the work.")
+    return suggestions
+
+
 def _filter_messages(messages: list[dict[str, Any]], agent: str | None, limit: int) -> list[dict[str, Any]]:
     if agent:
         needle = agent.strip().lower()
@@ -592,6 +666,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff sessions "$@"\n'
     elif kind == "drift":
         command = 'exec agentcodehandoff drift "$@"\n'
+    elif kind == "suggest":
+        command = 'exec agentcodehandoff suggest "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -661,7 +737,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "sessions", "drift"):
+    for kind in ("dashboard", "auto-status", "status", "sessions", "drift", "suggest"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -810,6 +886,20 @@ def _drift_lines(sessions: list[dict[str, Any]], claims: list[dict[str, Any]], w
     return lines
 
 
+def _suggestion_lines(sessions: list[dict[str, Any]], claims: list[dict[str, Any]], width: int, limit: int) -> list[str]:
+    lines: list[str] = []
+    for session in _active_sessions(sessions):
+        drift = _session_drift(session, claims)
+        suggestions = _session_suggestions(session, drift, claims)
+        if not suggestions:
+            continue
+        head = f"{session.get('agent', '?')}::{session.get('scope', '') or '(no scope)'}"
+        lines.append(_truncate(f"{head} -> {suggestions[0]}", width))
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def _render_panel(title: str, rows: list[str], width: int, height: int | None = None) -> list[str]:
     inner_width = max(10, width - 4)
     top = f"+- {title} " + "-" * max(0, width - len(title) - 5) + "+"
@@ -918,13 +1008,17 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     lines.append("")
 
     drift_rows = _drift_lines(sessions, claims, left_width - 4, limit=4) or ["No session drift"]
-    resolved_rows = [_claim_summary_line(claim, right_width - 4) for claim in resolved_claims] or ["No resolved claims"]
+    suggestion_rows = _suggestion_lines(sessions, claims, right_width - 4, limit=4) or ["No suggestions"]
     lines.extend(
         _merge_columns(
             _render_panel("File Awareness", drift_rows, left_width, height=8),
-            _render_panel("Recently Resolved", resolved_rows, right_width, height=8),
+            _render_panel("Suggestions", suggestion_rows, right_width, height=8),
         )
     )
+    lines.append("")
+
+    resolved_rows = [_claim_summary_line(claim, total_width - 4) for claim in resolved_claims] or ["No resolved claims"]
+    lines.extend(_render_panel("Recently Resolved", resolved_rows, total_width, height=8))
     lines.append("")
 
     recent_rows: list[str] = []
@@ -1286,6 +1380,26 @@ def cmd_drift(args: argparse.Namespace) -> None:
         unexpected_files = drift.get("unexpected_files", [])
         if unexpected_files:
             print(f"  outside claim: {', '.join(unexpected_files[:8])}")
+        print()
+
+
+def cmd_suggest(args: argparse.Namespace) -> None:
+    claims = _read_claims(args.claims_path)
+    sessions = _read_sessions(args.sessions_path)
+    if args.agent:
+        sessions = [session for session in sessions if str(session.get("agent", "")).lower() == args.agent.lower()]
+    if not args.all:
+        sessions = _active_sessions(sessions)
+    sessions = sessions[-args.limit:]
+    if not sessions:
+        print("no sessions")
+        return
+    for session in sessions:
+        drift = _session_drift(session, claims)
+        suggestions = _session_suggestions(session, drift, claims)
+        print(_session_drift_summary_line(session, drift, 120))
+        for suggestion in suggestions:
+            print(f"  suggest: {suggestion}")
         print()
 
 
@@ -1714,6 +1828,12 @@ def build_parser() -> argparse.ArgumentParser:
     drift_parser.add_argument("--limit", type=int, default=20)
     drift_parser.add_argument("--all", action="store_true", help="include closed sessions")
     drift_parser.set_defaults(func=cmd_drift)
+
+    suggest_parser = subparsers.add_parser("suggest", help="recommend how to resolve session drift or unscoped edits")
+    suggest_parser.add_argument("--agent", help="filter sessions by agent")
+    suggest_parser.add_argument("--limit", type=int, default=20)
+    suggest_parser.add_argument("--all", action="store_true", help="include closed sessions")
+    suggest_parser.set_defaults(func=cmd_suggest)
 
     session_end_parser = subparsers.add_parser("session-end", help="close an agent worktree session")
     session_end_parser.add_argument("--agent", required=True)
