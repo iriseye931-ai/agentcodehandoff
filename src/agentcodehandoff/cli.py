@@ -677,10 +677,18 @@ def _session_remediations(session: dict[str, Any], drift: dict[str, Any], claims
         )
         return remediations
 
+    scope_slug = _slugify("-".join(unexpected_files[:2]) or f"{session.get('scope', '')}-split")
+    new_scope = f"{session.get('scope', '')}-{scope_slug}".strip("-")
+    summary = f"Split scope for {', '.join(unexpected_files[:2])}" if unexpected_files else "Split scope"
+    recommended_agent, meta = _recommend_agent(summary, f"Split work from session {session.get('scope', '')}", unexpected_files)
     remediations.append(
         {
-            "type": "manual",
-            "message": f"Split {', '.join(unexpected_files[:3]) or 'drifted files'} into a new scope or separate session.",
+            "type": "split-claim",
+            "scope": new_scope,
+            "agent": recommended_agent,
+            "files": unexpected_files,
+            "route_meta": meta,
+            "message": f"Create new scope `{new_scope}` for {', '.join(unexpected_files[:3]) or 'drifted files'} and assign it to {recommended_agent}.",
         }
     )
     return remediations
@@ -1672,7 +1680,10 @@ def cmd_suggest(args: argparse.Namespace) -> None:
         for remediation in remediations:
             action = str(remediation.get("type", "")).strip()
             if action and action not in {"noop", "manual"}:
+                detail = str(remediation.get("message", "")).strip()
                 print(f"  action: {action}")
+                if detail:
+                    print(f"    {detail}")
         print()
 
 
@@ -1707,7 +1718,7 @@ def cmd_remediate(args: argparse.Namespace) -> None:
         raise SystemExit("no matching session")
     drift = _session_drift(session, claims)
     remediations = _session_remediations(session, drift, claims)
-    actionable = [item for item in remediations if str(item.get("type", "")) in {"expand-claim", "handoff"}]
+    actionable = [item for item in remediations if str(item.get("type", "")) in {"expand-claim", "handoff", "split-claim"}]
     if not actionable:
         for item in remediations:
             print(item.get("message", "no actionable remediation"))
@@ -1758,6 +1769,56 @@ def cmd_remediate(args: argparse.Namespace) -> None:
             files=files,
         )
         print(f"sent handoff to {to_agent} for: {', '.join(files)}")
+        return
+
+    if action_type == "split-claim":
+        new_scope = str(chosen.get("scope", "")).strip()
+        target_agent = str(chosen.get("agent", "")).strip() or args.agent
+        files = [str(item) for item in chosen.get("files", []) if str(item).strip()]
+        if not new_scope or not files:
+            raise SystemExit("split-claim remediation is missing scope or files")
+        new_claim = {
+            "id": f"claim-{datetime.now(timezone.utc).timestamp():.6f}",
+            "timestamp": _now_iso(),
+            "agent": target_agent,
+            "scope": new_scope,
+            "summary": f"Split from {args.scope}",
+            "files": files,
+            "state": "open",
+            "released": False,
+        }
+        claims.append(new_claim)
+        _write_claims(args.claims_path, claims)
+        print(f"created claim {new_scope} for {target_agent}: {', '.join(files)}")
+
+        if target_agent != args.agent:
+            _send_record(
+                args.inbox_path,
+                from_agent=args.agent,
+                to_agent=target_agent,
+                role="handoff",
+                task="split remediation",
+                summary=f"New split scope {new_scope}",
+                details=f"Created split claim {new_scope} from session {args.scope}",
+                files=files,
+            )
+            print(f"sent handoff to {target_agent} for new scope {new_scope}")
+            return
+
+        if args.create_session:
+            repo_root = Path(str(session.get("repo_root", "")))
+            start_args = argparse.Namespace(
+                sessions_path=args.sessions_path,
+                agent=target_agent,
+                scope=new_scope,
+                repo=repo_root,
+                branch=None,
+                base_ref=None,
+                path=None,
+                claim_scope=new_scope,
+                note=f"Auto-created from split remediation of {args.scope}",
+            )
+            cmd_session_start(start_args)
         return
 
 
@@ -2501,7 +2562,8 @@ def build_parser() -> argparse.ArgumentParser:
     remediate_parser = subparsers.add_parser("remediate", help="apply a safe remediation for session drift")
     remediate_parser.add_argument("--agent", required=True)
     remediate_parser.add_argument("--scope", required=True)
-    remediate_parser.add_argument("--action", choices=["auto", "expand-claim", "handoff"], default="auto")
+    remediate_parser.add_argument("--action", choices=["auto", "expand-claim", "handoff", "split-claim"], default="auto")
+    remediate_parser.add_argument("--create-session", action="store_true", help="when split-claim stays with the same agent, create a new session too")
     remediate_parser.add_argument("--dry-run", action="store_true")
     remediate_parser.set_defaults(func=cmd_remediate)
 

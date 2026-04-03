@@ -232,6 +232,12 @@ Apply a safe remediation automatically:
 agentcodehandoff remediate --agent codex --scope parser-pass
 ```
 
+Create a new split scope and session when drift becomes separate work:
+
+```bash
+agentcodehandoff remediate --agent codex --scope parser-pass --create-session
+```
+
 ## Core Commands
 
 ```bash
@@ -324,6 +330,7 @@ It shows:
 - file-awareness drift summaries
 - actionable suggestions for expand, split, or handoff decisions
 - safe remediation helpers for claim expansion and handoff generation
+- split-work remediation that can create a new claim and optional session
 
 ## Worktree Sessions
 
