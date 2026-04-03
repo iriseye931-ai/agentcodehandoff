@@ -33,6 +33,19 @@ REQUEST_STALE_SECONDS = 300
 REQUEST_ESCALATE_SECONDS = 900
 BRIDGE_EVENT_HISTORY = 8
 BRIDGE_COOL_OFF_SECONDS = 300
+SUPPORTED_AGENTS = ("codex", "hermes")
+
+
+def _default_agents() -> list[str]:
+    return list(SUPPORTED_AGENTS)
+
+
+def _default_peer(agent: str) -> str:
+    normalized = str(agent).strip().lower()
+    for candidate in SUPPORTED_AGENTS:
+        if candidate != normalized:
+            return candidate
+    return ""
 
 
 def _now_iso() -> str:
@@ -1079,7 +1092,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
     elif kind == "auto":
         command = f'exec agentcodehandoff auto --agent "{agent}" "$@"\n'
     elif kind == "request":
-        default_to = "hermes" if agent == "codex" else "codex"
+        default_to = _default_peer(agent)
         command = (
             'if [ "$#" -lt 1 ]; then\n'
             f'  echo "usage: agentcodehandoff-{agent}-request --summary <text> [extra args]" >&2\n'
@@ -1090,7 +1103,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
     elif kind == "claim":
         command = f'exec agentcodehandoff claim --agent "{agent}" "$@"\n'
     elif kind == "done":
-        default_to = "hermes" if agent == "codex" else "codex"
+        default_to = _default_peer(agent)
         command = (
             'if [ "$#" -lt 1 ]; then\n'
             f'  echo "usage: agentcodehandoff-{agent}-done --summary <text> [extra args]" >&2\n'
@@ -1099,7 +1112,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
             f'exec agentcodehandoff done --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
         )
     elif kind == "blocked":
-        default_to = "hermes" if agent == "codex" else "codex"
+        default_to = _default_peer(agent)
         command = (
             'if [ "$#" -lt 1 ]; then\n'
             f'  echo "usage: agentcodehandoff-{agent}-blocked --summary <text> [extra args]" >&2\n'
@@ -1108,7 +1121,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
             f'exec agentcodehandoff blocked --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
         )
     elif kind == "review":
-        default_to = "hermes" if agent == "codex" else "codex"
+        default_to = _default_peer(agent)
         command = (
             'if [ "$#" -lt 1 ]; then\n'
             f'  echo "usage: agentcodehandoff-{agent}-review --summary <text> [extra args]" >&2\n'
@@ -1119,7 +1132,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
     elif kind == "release":
         command = f'exec agentcodehandoff release --agent "{agent}" "$@"\n'
     elif kind == "send":
-        default_to = "hermes" if agent == "codex" else "codex"
+        default_to = _default_peer(agent)
         command = (
             'if [ "$#" -lt 1 ]; then\n'
             f'  echo "usage: agentcodehandoff-{agent}-send --summary <text> [extra args]" >&2\n'
@@ -1143,7 +1156,7 @@ def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
         path.write_text(_generic_wrapper_script(kind), encoding="utf-8")
         path.chmod(0o755)
         wrappers.append(path)
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         for kind in ("watch", "read", "auto", "send", "request", "claim", "done", "blocked", "review", "release"):
             path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
             if path.exists() and not force:
@@ -1489,7 +1502,7 @@ def _suggestion_lines(sessions: list[dict[str, Any]], claims: list[dict[str, Any
 
 def _supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) -> list[str]:
     lines: list[str] = []
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         status = _supervised_bridge_status(home, inbox_path, agent)
         lines.append(_bridge_supervision_line(status, width))
         buckets = status.get("pending_buckets", {}) if isinstance(status.get("pending_buckets"), dict) else {}
@@ -1543,7 +1556,7 @@ def _ops_actions(home: Path, inbox_path: Path, claims_path: Path, sessions_path:
     sessions = _read_sessions(sessions_path)
     request_records = _request_records(messages)
 
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         status = _supervised_bridge_status(home, inbox_path, agent)
         has_bridge_context = bool(status.get("failure_class")) or bool(status.get("lock")) or bool(status.get("profile"))
         if has_bridge_context and not bool(status.get("healthy")) and (bool(status.get("failure_class")) or not bool(status.get("alive")) or bool(status.get("lock", {}).get("paused", False))):
@@ -1621,7 +1634,7 @@ def _ops_actions(home: Path, inbox_path: Path, claims_path: Path, sessions_path:
 
 def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) -> list[str]:
     rows: list[str] = []
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         status = _supervised_bridge_status(home, inbox_path, agent)
         unhealthy = not bool(status.get("healthy")) or bool(status.get("failure_class")) or int(status.get("pending_count", 0) or 0) > 0
         if not unhealthy:
@@ -1726,7 +1739,7 @@ def _stale_request_actions(record: dict[str, Any]) -> list[dict[str, Any]]:
     original_to = str(request.get("to", "")).strip()
     target, _ = _recommend_agent(summary, details, files)
     if target.lower() == original_to.lower():
-        target = "hermes" if original_to.lower() == "codex" else "codex"
+        target = _default_peer(original_to) or target
     if isinstance(age_seconds, (int, float)) and age_seconds >= REQUEST_ESCALATE_SECONDS and _request_has_followup(record, "reroute"):
         return [
             {
@@ -1885,14 +1898,14 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     lines.append("")
 
     bridge_rows = []
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         status = _supervised_bridge_status(home, inbox_path, agent)
         bridge_rows.append(_bridge_supervision_line(status, left_width - 4))
     if not bridge_rows:
         bridge_rows = ["No bridge state yet"]
 
     handoff_rows = []
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         message = latest_by_agent.get(agent)
         if message:
             handoff_rows.append(_truncate(f"{agent}: {message.get('summary', '')}", right_width - 4))
@@ -2083,7 +2096,7 @@ def cmd_dispatch(args: argparse.Namespace) -> None:
     if args.route == "smart":
         chosen, meta = _recommend_agent(args.summary, args.details, files)
     if chosen == args.from_agent and not args.allow_self_route:
-        chosen = "hermes" if args.from_agent == "codex" else "codex"
+        chosen = _default_peer(args.from_agent) or chosen
         rerouted = True
     record = _write_message(
         args.inbox_path,
@@ -2796,7 +2809,7 @@ def cmd_bridge_status(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_profiles(args: argparse.Namespace) -> None:
-    agents = args.agents or ["codex", "hermes"]
+    agents = args.agents or _default_agents()
     profiles = []
     for agent in agents:
         profile = _read_bridge_profile(_bridge_profile_path(args.home, agent))
@@ -3089,7 +3102,7 @@ def cmd_bridge_restart(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_recover(args: argparse.Namespace) -> None:
-    agents = args.agents or ["codex", "hermes"]
+    agents = args.agents or _default_agents()
     recovered = False
     for agent in agents:
         status = _supervised_bridge_status(args.home, args.inbox_path, agent)
@@ -3482,7 +3495,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         ),
     ]
 
-    for agent in ("codex", "hermes"):
+    for agent in SUPPORTED_AGENTS:
         for kind in ("watch", "send"):
             wrapper_path = args.bin_dir / f"agentcodehandoff-{agent}-{kind}"
             warnings.append(
@@ -3515,7 +3528,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="create local state and optional shell wrappers")
-    init_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    init_parser.add_argument("--agents", nargs="+", default=_default_agents())
     init_parser.add_argument("--seed", action="store_true", help="seed bootstrap messages for agents")
     init_parser.add_argument("--install-wrappers", action="store_true", help="install helper wrapper scripts into the bin dir")
     init_parser.add_argument("--force", action="store_true", help="overwrite existing wrapper scripts")
@@ -3527,7 +3540,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.set_defaults(func=cmd_doctor)
 
     auto_parser = subparsers.add_parser("auto", help="watch the inbox and auto-reply using a local agent CLI")
-    auto_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    auto_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     auto_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for the agent")
     auto_parser.add_argument("--interval", type=float, default=2.0)
     auto_parser.add_argument("--once", action="store_true", help="process pending messages once and exit")
@@ -3541,7 +3554,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.set_defaults(func=cmd_auto)
 
     supervise_parser = subparsers.add_parser("supervise", help=argparse.SUPPRESS)
-    supervise_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    supervise_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     supervise_parser.add_argument("--repo", type=Path, default=Path.cwd())
     supervise_parser.add_argument("--interval", type=float, default=2.0)
     supervise_parser.add_argument("--claim-on-files", action="store_true")
@@ -3556,15 +3569,15 @@ def build_parser() -> argparse.ArgumentParser:
     supervise_parser.set_defaults(func=cmd_supervise)
 
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
-    auto_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    auto_status_parser.add_argument("--agents", nargs="+", default=_default_agents())
     auto_status_parser.set_defaults(func=cmd_auto_status)
 
     bridge_status_parser = subparsers.add_parser("bridge-status", help="show supervised bridge health, pid, and pending requests")
-    bridge_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_status_parser.add_argument("--agents", nargs="+", default=_default_agents())
     bridge_status_parser.set_defaults(func=cmd_bridge_status)
 
     bridge_profiles_parser = subparsers.add_parser("bridge-profiles", help="list saved bridge profiles")
-    bridge_profiles_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_profiles_parser.add_argument("--agents", nargs="+", default=_default_agents())
     bridge_profiles_parser.set_defaults(func=cmd_bridge_profiles)
 
     bridge_presets_parser = subparsers.add_parser("bridge-presets", help="list saved bridge presets")
@@ -3576,7 +3589,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     bridge_preset_save_parser = subparsers.add_parser("bridge-preset-save", help="save the current bridge profiles as a named preset")
     bridge_preset_save_parser.add_argument("--name", required=True)
-    bridge_preset_save_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_preset_save_parser.add_argument("--agents", nargs="+", default=_default_agents())
     bridge_preset_save_parser.set_defaults(func=cmd_bridge_preset_save)
 
     bridge_preset_apply_parser = subparsers.add_parser("bridge-preset-apply", help="apply a named bridge preset to saved profiles and optionally start bridges")
@@ -3593,15 +3606,15 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_preset_delete_parser.set_defaults(func=cmd_bridge_preset_delete)
 
     bridge_profile_show_parser = subparsers.add_parser("bridge-profile-show", help="show the saved profile for one agent")
-    bridge_profile_show_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_profile_show_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     bridge_profile_show_parser.set_defaults(func=cmd_bridge_profile_show)
 
     bridge_profile_delete_parser = subparsers.add_parser("bridge-profile-delete", help="delete the saved profile for one agent")
-    bridge_profile_delete_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_profile_delete_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     bridge_profile_delete_parser.set_defaults(func=cmd_bridge_profile_delete)
 
     bridge_start_parser = subparsers.add_parser("bridge-start", help="start a supervised background bridge for an agent")
-    bridge_start_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_start_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     bridge_start_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for the bridge")
     bridge_start_parser.add_argument("--interval", type=float, default=2.0)
     bridge_start_parser.add_argument("--claim-on-files", action="store_true")
@@ -3614,13 +3627,13 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_start_parser.set_defaults(func=cmd_bridge_start)
 
     bridge_stop_parser = subparsers.add_parser("bridge-stop", help="stop a supervised background bridge for an agent")
-    bridge_stop_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_stop_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     bridge_stop_parser.add_argument("--timeout", type=float, default=3.0)
     bridge_stop_parser.add_argument("--force", action="store_true")
     bridge_stop_parser.set_defaults(func=cmd_bridge_stop)
 
     bridge_restart_parser = subparsers.add_parser("bridge-restart", help="restart a supervised background bridge for an agent")
-    bridge_restart_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_restart_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
     bridge_restart_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for the bridge")
     bridge_restart_parser.add_argument("--interval", type=float, default=2.0)
     bridge_restart_parser.add_argument("--claim-on-files", action="store_true")
@@ -3634,7 +3647,7 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_restart_parser.set_defaults(func=cmd_bridge_restart)
 
     bridge_recover_parser = subparsers.add_parser("bridge-recover", help="restart paused or down supervised bridges using their last known settings")
-    bridge_recover_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_recover_parser.add_argument("--agents", nargs="+", default=_default_agents())
     bridge_recover_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="fallback repo if a bridge has no saved repo")
     bridge_recover_parser.add_argument("--interval", type=float, default=2.0)
     bridge_recover_parser.add_argument("--claim-on-files", action="store_true")
@@ -3690,7 +3703,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.set_defaults(func=cmd_watch)
 
     status_parser = subparsers.add_parser("status", help="show latest handoffs per agent and current claims")
-    status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    status_parser.add_argument("--agents", nargs="+", default=_default_agents())
     status_parser.add_argument("--workflow-limit", type=int, default=6)
     status_parser.add_argument("--resolved-limit", type=int, default=5)
     status_parser.add_argument("--sessions-limit", type=int, default=5)
@@ -3800,7 +3813,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser.add_argument("--task", default="shared task")
     dispatch_parser.add_argument("--files", default="", help="comma-separated file list")
     dispatch_parser.add_argument("--route", choices=["smart", "explicit"], default="smart")
-    dispatch_parser.add_argument("--to-agent", choices=["codex", "hermes"], default="hermes")
+    dispatch_parser.add_argument("--to-agent", choices=SUPPORTED_AGENTS, default="hermes")
     dispatch_parser.add_argument("--allow-self-route", action="store_true", help="allow smart routing to target the originating agent")
     dispatch_parser.add_argument("--role", default="request")
     dispatch_parser.set_defaults(func=cmd_dispatch)
