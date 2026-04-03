@@ -749,6 +749,26 @@ agentcodehandoff dispatch \
 - Default wrapper directory: `~/.local/bin`
 - Default session state file: `~/.agentcodehandoff/sessions.json`
 
+## Support Matrix
+
+- Python: `3.10+`
+- Operating model: local-first, terminal-first
+- Repo type: local git repositories
+- Agent CLIs: Codex, Claude, and Hermes are the primary supported agents today
+- Platform expectation: Unix-like environments with `git`, `python3`, and standard process semantics
+
+Current support is strongest for:
+
+- local development on macOS and Linux-style shells
+- one machine coordinating two or three terminal agents
+- repos where the local agent CLIs are already installed and authenticated
+
+Current non-goals:
+
+- hosted/cloud orchestration
+- remote multi-machine coordination
+- GUI-first workflows
+
 ## Positioning
 
 `agentcodehandoff` is intentionally narrow:
@@ -767,6 +787,24 @@ It is the coordination layer you add when multiple coding agents already exist a
 - notifications
 - optional HTTP/WebSocket relay
 
+## Release Checklist
+
+Before a broad public release, make sure all of these are true:
+
+- `python3 -m unittest discover -s tests -v` passes
+- `python3 -m py_compile src/agentcodehandoff/cli.py tests/test_cli.py` passes
+- `install.sh` works on a fresh machine/user profile
+- `doctor` gives actionable output for missing CLIs and invalid repos
+- `up --template local-trio` and `down --template local-trio --force` are verified in a disposable repo
+- `bridge-status`, `logs`, `ps`, and `dashboard --view ops` all reflect the same bridge reality
+- README examples still match the actual CLI flags and command names
+- known limitations are still accurate
+- screenshots or terminal captures are current
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
-MIT
+See [LICENSE](LICENSE).
