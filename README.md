@@ -1,37 +1,45 @@
-# Agents Inbox
+<p align="center">
+  <img src="assets/agents-inbox-mark.svg" alt="Agents Inbox" width="96" height="96" />
+</p>
 
-> The shared handoff layer for coding agents.
+<h1 align="center">Agents Inbox</h1>
 
-`agents-inbox` gives Codex, Claude Code, and other terminal agents one local place to coordinate work without a daemon, cloud relay, or a human acting as copy-paste middleware.
+<p align="center"><strong>Professional coordination for coding agents.</strong></p>
 
-```text
-   /\    ____   _____ _   _ _____ ____   ____     ___ _   _ ____   _____  __
-  /  \  / ___| | ____| \ | |_   _/ ___| |  _ \   |_ _| \ | | __ ) / _ \ \/ /
- / /\ \| |  _  |  _| |  \| | | | \___ \ | | | |   | ||  \| |  _ \| | | \  / 
-/ ____ \ |_| | | |___| |\  | | |  ___) || |_| |   | || |\  | |_) | |_| /  \ 
-/_/    \_\____| |_____|_| \_| |_| |____/ |____/   |___|_| \_|____/ \___/_/\_\
-```
+<p align="center">
+  <em>A local-first shared inbox, handoff stream, and claim board for Codex, Claude Code, and other terminal agents.</em>
+</p>
 
-## What It Is
+`agents-inbox` gives multiple coding agents one professional coordination layer inside a shared repo: clear handoffs, explicit ownership, and a durable local record of who is doing what.
 
-- Shared inbox for agent-to-agent handoffs
-- Lightweight claim board for file and scope ownership
-- Terminal-first workflow for two or more agents in one repo
-- Local-only by default: state lives in `~/.agents-inbox`
+It is built for teams running:
 
-## Why It Exists
+- Codex + Claude Code
+- two or more agent terminals on one machine
+- one shared codebase
+- a zero-infrastructure workflow
 
-Most multi-agent coding workflows fail on coordination, not generation:
+## Why Teams Need It
+
+Most multi-agent coding workflows break on coordination, not model quality:
 
 - no durable handoff stream
 - no clear ownership of files or scopes
 - no quick way to see who is doing what
 - too much manual relaying between terminals
 
-`agents-inbox` solves that with two files:
+`agents-inbox` fixes that with a small, explicit local state model:
 
 - `~/.agents-inbox/inbox.jsonl`
 - `~/.agents-inbox/claims.json`
+
+## What It Includes
+
+- Shared inbox for agent-to-agent handoffs
+- Lightweight claim board for file and scope ownership
+- Terminal-first workflow for two or more agents in one repo
+- Local-first state with no daemon required
+- Agent-specific wrapper commands for faster day-to-day use
 
 ## Quick Start
 
@@ -40,7 +48,7 @@ cd agent-inbox
 ./install.sh
 ```
 
-That installs the CLI, creates the local state directory, seeds bootstrap messages, and adds helper wrappers under `~/.local/bin`.
+That installs the CLI, creates the local state directory, seeds bootstrap messages, and installs helper wrappers under `~/.local/bin`.
 
 Try a disposable end-to-end demo:
 
@@ -130,6 +138,16 @@ Installed by `agents-inbox init --install-wrappers`:
 - Default state directory: `~/.agents-inbox`
 - Override with `AGENTS_INBOX_HOME`
 - Default wrapper directory: `~/.local/bin`
+
+## Positioning
+
+`agents-inbox` is intentionally narrow:
+
+- not a cloud orchestration platform
+- not a task router with hidden state
+- not a heavyweight agent framework
+
+It is the coordination layer you add when multiple coding agents already exist and need to collaborate reliably in one repo.
 
 ## Roadmap
 

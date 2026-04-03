@@ -14,6 +14,10 @@ authors = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/iriseye931-ai/agents-inbox"
+Repository = "https://github.com/iriseye931-ai/agents-inbox"
+
 [project.scripts]
 agents-inbox = "agents_inbox.cli:main"
 
