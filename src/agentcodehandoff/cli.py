@@ -183,6 +183,18 @@ def _save_bridge_profile(home: Path, payload: dict[str, Any]) -> None:
     _write_bridge_profile(_bridge_profile_path(home, agent), profile)
 
 
+def _bridge_profile_summary_line(profile: dict[str, Any], width: int) -> str:
+    agent = str(profile.get("agent", "?")).strip() or "?"
+    repo = str(profile.get("repo", "")).strip() or "(no repo)"
+    auto_sweep = "sweep" if bool(profile.get("auto_sweep", False)) else "manual"
+    max_restarts = int(profile.get("max_restarts", 0) or 0)
+    cool_off_seconds = float(profile.get("cool_off_seconds", 0.0) or 0.0)
+    return _truncate(
+        f"{agent}: {repo} | {auto_sweep} | restart max={max_restarts} window={int(cool_off_seconds)}s",
+        width,
+    )
+
+
 def _append_bridge_event(path: Path, event_type: str, summary: str, *, detail: str = "") -> None:
     payload = _read_bridge_lock(path)
     history = payload.get("recent_events", [])
@@ -994,6 +1006,12 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff bridge-status "$@"\n'
     elif kind == "bridge-recover":
         command = 'exec agentcodehandoff bridge-recover "$@"\n'
+    elif kind == "bridge-profiles":
+        command = 'exec agentcodehandoff bridge-profiles "$@"\n'
+    elif kind == "bridge-profile-show":
+        command = 'exec agentcodehandoff bridge-profile-show "$@"\n'
+    elif kind == "bridge-profile-delete":
+        command = 'exec agentcodehandoff bridge-profile-delete "$@"\n'
     elif kind == "ops":
         command = 'exec agentcodehandoff dashboard --view ops "$@"\n'
     elif kind == "request-approve":
@@ -1073,7 +1091,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "request-approve", "request-close", "request-escalate", "request-resolve"):
+    for kind in ("dashboard", "ops", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -2650,6 +2668,50 @@ def cmd_bridge_status(args: argparse.Namespace) -> None:
         _print_bridge_supervision(status)
 
 
+def cmd_bridge_profiles(args: argparse.Namespace) -> None:
+    agents = args.agents or ["codex", "hermes"]
+    profiles = []
+    for agent in agents:
+        profile = _read_bridge_profile(_bridge_profile_path(args.home, agent))
+        if profile:
+            profiles.append(profile)
+    if not profiles:
+        print("no saved bridge profiles")
+        return
+    for profile in profiles:
+        print(_bridge_profile_summary_line(profile, 120))
+        updated_at = str(profile.get("updated_at", "")).strip()
+        if updated_at:
+            print(f"  updated: {_format_timestamp(updated_at)}")
+        print(f"  repo: {profile.get('repo', '')}")
+        print(
+            f"  interval: {float(profile.get('interval', 2.0) or 2.0):.1f}s"
+            f" | auto_sweep: {bool(profile.get('auto_sweep', False))}"
+            f" | sweep_interval: {float(profile.get('sweep_interval', 30.0) or 30.0):.1f}s"
+        )
+        print(
+            f"  restart policy: max={int(profile.get('max_restarts', 5) or 5)}"
+            f" window={float(profile.get('cool_off_seconds', BRIDGE_COOL_OFF_SECONDS) or BRIDGE_COOL_OFF_SECONDS):.0f}s"
+        )
+        print()
+
+
+def cmd_bridge_profile_show(args: argparse.Namespace) -> None:
+    profile = _read_bridge_profile(_bridge_profile_path(args.home, args.agent))
+    if not profile:
+        raise SystemExit(f"no saved profile for {args.agent}")
+    print(json.dumps(profile, indent=2))
+
+
+def cmd_bridge_profile_delete(args: argparse.Namespace) -> None:
+    path = _bridge_profile_path(args.home, args.agent)
+    if not path.exists():
+        print(f"no saved profile for {args.agent}")
+        return
+    path.unlink()
+    print(f"deleted saved profile for {args.agent}")
+
+
 def cmd_bridge_start(args: argparse.Namespace) -> None:
     status = _supervised_bridge_status(args.home, args.inbox_path, args.agent)
     if status["alive"]:
@@ -3184,6 +3246,18 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_status_parser = subparsers.add_parser("bridge-status", help="show supervised bridge health, pid, and pending requests")
     bridge_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     bridge_status_parser.set_defaults(func=cmd_bridge_status)
+
+    bridge_profiles_parser = subparsers.add_parser("bridge-profiles", help="list saved bridge profiles")
+    bridge_profiles_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_profiles_parser.set_defaults(func=cmd_bridge_profiles)
+
+    bridge_profile_show_parser = subparsers.add_parser("bridge-profile-show", help="show the saved profile for one agent")
+    bridge_profile_show_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_profile_show_parser.set_defaults(func=cmd_bridge_profile_show)
+
+    bridge_profile_delete_parser = subparsers.add_parser("bridge-profile-delete", help="delete the saved profile for one agent")
+    bridge_profile_delete_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_profile_delete_parser.set_defaults(func=cmd_bridge_profile_delete)
 
     bridge_start_parser = subparsers.add_parser("bridge-start", help="start a supervised background bridge for an agent")
     bridge_start_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])

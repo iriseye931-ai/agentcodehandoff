@@ -64,6 +64,14 @@ Try a disposable end-to-end demo:
 ./examples/demo-session.sh
 ```
 
+For the full supervised collaboration path, start with:
+
+1. `agentcodehandoff doctor`
+2. `agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep`
+3. `agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep`
+4. `agentcodehandoff dashboard --view ops`
+5. `agentcodehandoff bridge-status`
+
 ## First Run
 
 ```bash
@@ -71,14 +79,14 @@ agentcodehandoff doctor
 agentcodehandoff status
 ```
 
-Start two terminals:
+For a read-only observer setup, start two terminals:
 
 ```bash
 agentcodehandoff-codex-watch
 agentcodehandoff-hermes-watch
 ```
 
-Start auto-reply bridges in real terminals:
+For manually managed auto-reply bridges, start them in real terminals:
 
 ```bash
 agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
@@ -97,7 +105,7 @@ Check whether the bridges appear alive:
 agentcodehandoff auto-status
 ```
 
-Start supervised background bridges:
+For day-to-day supervised operation, prefer managed background bridges instead of keeping separate reply terminals open:
 
 ```bash
 agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
@@ -108,9 +116,10 @@ Inspect supervised bridge health:
 
 ```bash
 agentcodehandoff bridge-status
+agentcodehandoff bridge-profiles
 ```
 
-Open the live terminal dashboard:
+Open the live terminal dashboard. Use the default view for coordination and the ops view for bridge supervision, stale requests, and recovery visibility:
 
 ```bash
 agentcodehandoff-dashboard
@@ -260,6 +269,13 @@ agentcodehandoff bridge-recover
 ```
 
 Bridge recovery uses the last saved per-agent profile even after a full stop removes the live lock.
+
+Inspect or delete a saved bridge profile:
+
+```bash
+agentcodehandoff bridge-profile-show --agent codex
+agentcodehandoff bridge-profile-delete --agent hermes
+```
 
 Apply a safe remediation automatically:
 
