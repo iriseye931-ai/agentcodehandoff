@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -10,10 +11,13 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = REPO_ROOT / "src" / "agentcodehandoff" / "cli.py"
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from agentcodehandoff import cli as ach_cli
 
 
 def run_cli(args: list[str], *, env: dict[str, str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -198,6 +202,10 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             time.sleep(0.5)
         self.fail(last_output)
 
+    def read_bridge_lock(self, agent: str) -> dict[str, object]:
+        path = self.home / "bridges" / f"{agent}.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
     def tearDown(self) -> None:
         try:
             run_cli(["down", "--template", "local-trio", "--repo", str(self.repo), "--force"], env=self.env)
@@ -315,6 +323,50 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("bridge process was not running; removed stale lock", result.stdout)
         self.assertIn("started claude bridge", result.stdout)
         self.wait_for_bridge_health("claude")
+
+    def test_supervise_pauses_after_restart_cap(self) -> None:
+        ach_cli._ensure_state(self.home, self.home / "inbox.jsonl", self.home / "claims.json")
+        lock_path = self.home / "bridges" / "claude.json"
+
+        class FakeProcess:
+            next_pid = 40000
+
+            def __init__(self, *args, **kwargs) -> None:
+                self.pid = FakeProcess.next_pid
+                FakeProcess.next_pid += 1
+
+            def poll(self) -> int:
+                return 1
+
+        args = argparse.Namespace(
+            home=self.home,
+            inbox_path=self.home / "inbox.jsonl",
+            claims_path=self.home / "claims.json",
+            sessions_path=self.home / "sessions.json",
+            agent="claude",
+            repo=self.repo,
+            interval=0.01,
+            claim_on_files=False,
+            claim_scope_prefix="auto-",
+            verbose=False,
+            log_path="",
+            always_restart=False,
+            auto_sweep=False,
+            sweep_interval=30.0,
+            max_restarts=1,
+            cool_off_seconds=300.0,
+        )
+
+        with mock.patch.object(ach_cli.subprocess, "Popen", side_effect=FakeProcess), mock.patch.object(ach_cli.time, "sleep", lambda _: None):
+            ach_cli.cmd_supervise(args)
+
+        lock = self.read_bridge_lock("claude")
+        self.assertTrue(lock.get("paused"))
+        self.assertEqual(lock.get("failure_class"), "restart-limit")
+        self.assertGreaterEqual(int(lock.get("restart_count", 0) or 0), 2)
+        events = lock.get("recent_events", [])
+        self.assertTrue(any(event.get("type") == "paused" for event in events if isinstance(event, dict)))
+        lock_path.unlink(missing_ok=True)
 
     def test_local_trio_starts_and_reports_healthy(self) -> None:
         init = run_cli(["init", "--install-wrappers", "--seed", "--bin-dir", str(self.bin_dir)], env=self.env)

@@ -3725,6 +3725,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
             _append_bridge_event(lock_path, "startup-failed", f"Supervisor could not start {args.agent}", detail=str(exc)[:240])
             return
 
+        current_lock = _read_bridge_lock(lock_path)
         _write_bridge_lock(
             lock_path,
             {
@@ -3732,7 +3733,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "pid": process.pid,
                 "supervisor_pid": os.getpid(),
                 "repo": str(args.repo),
-                "started_at": existing.get("started_at") or _now_iso(),
+                "started_at": current_lock.get("started_at") or existing.get("started_at") or _now_iso(),
                 "last_heartbeat_at": "",
                 "interval": args.interval,
                 "claim_on_files": bool(args.claim_on_files),
@@ -3743,10 +3744,10 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "failure_class": "",
                 "auto_sweep": bool(args.auto_sweep),
                 "sweep_interval": float(args.sweep_interval),
-                "last_sweep_at": str(existing.get("last_sweep_at", "")).strip(),
+                "last_sweep_at": str(current_lock.get("last_sweep_at", "")).strip() or str(existing.get("last_sweep_at", "")).strip(),
                 "max_restarts": int(args.max_restarts),
                 "cool_off_seconds": float(args.cool_off_seconds),
-                "recent_events": existing.get("recent_events", []),
+                "recent_events": current_lock.get("recent_events", []),
             },
         )
         _append_bridge_event(lock_path, "child-start", f"Bridge child started for {args.agent}", detail=f"pid {process.pid}")
@@ -3800,7 +3801,8 @@ def cmd_supervise(args: argparse.Namespace) -> None:
             return
 
         restart_count += 1
-        backoff = min(BRIDGE_RESTART_MAX_DELAY, BRIDGE_RESTART_BASE_DELAY * (2 ** max(0, restart_count - 1)))
+        backoff_exponent = min(max(0, restart_count - 1), 20)
+        backoff = min(BRIDGE_RESTART_MAX_DELAY, BRIDGE_RESTART_BASE_DELAY * (2 ** backoff_exponent))
         hard_failure = _is_hard_failure(failure_class)
         recent_restart_times = _bridge_recent_restart_times(_read_bridge_lock(lock_path))
         now = datetime.now(timezone.utc)
