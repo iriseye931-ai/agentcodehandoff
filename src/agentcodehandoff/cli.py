@@ -1395,6 +1395,28 @@ def _print_check(level: str, label: str, detail: str) -> None:
     print(f"      {detail}")
 
 
+def _agent_cli_health(agent: str) -> tuple[bool, str]:
+    binary = shutil.which(agent)
+    if not binary:
+        return False, "not found on PATH"
+    try:
+        if agent == "codex":
+            result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
+        elif agent == "claude":
+            result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
+        elif agent == "hermes":
+            result = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False, timeout=10)
+        else:
+            result = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False, timeout=10)
+    except Exception as exc:
+        return False, str(exc)
+    combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    first_line = combined.splitlines()[0].strip() if combined else ""
+    if result.returncode != 0 and not first_line:
+        return False, f"exit {result.returncode}"
+    return True, f"{binary} | {first_line or f'exit {result.returncode}'}"
+
+
 def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
     last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
     last_reply = _parse_iso(str(state.get("last_reply_at", "")).strip())
@@ -3849,6 +3871,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             "yes" if str(args.bin_dir) in os.environ.get("PATH", "").split(":") else "no",
         ),
     ]
+
+    for agent in SUPPORTED_AGENTS:
+        ok, detail = _agent_cli_health(agent)
+        warnings.append((f"{agent} CLI ready", ok, detail))
 
     for agent in SUPPORTED_AGENTS:
         for kind in ("watch", "send"):
