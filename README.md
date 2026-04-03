@@ -41,6 +41,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - Workflow updates for `request`, `done`, `blocked`, and `review`
 - Claim resolution with final states like `completed`, `blocked`, and `abandoned`
 - Terminal-first workflow for two or more agents in one repo
+- Paneled terminal dashboard for bridge health, workflow, claims, conflicts, and recent messages
 - Local-first state with no daemon required
 - Agent-specific wrapper commands for faster day-to-day use
 
@@ -95,7 +96,7 @@ agentcodehandoff auto-status
 Open the live terminal dashboard:
 
 ```bash
-agentcodehandoff dashboard
+agentcodehandoff-dashboard
 ```
 
 Send a handoff:
@@ -183,6 +184,8 @@ agentcodehandoff latest --agent hermes
 agentcodehandoff status
 agentcodehandoff auto-status
 agentcodehandoff dashboard
+agentcodehandoff-dashboard
+agentcodehandoff-status
 agentcodehandoff claims
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 ```
@@ -201,6 +204,9 @@ agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 
 Installed by `agentcodehandoff init --install-wrappers`:
 
+- `agentcodehandoff-dashboard`
+- `agentcodehandoff-auto-status`
+- `agentcodehandoff-status`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-codex-read`
@@ -231,6 +237,20 @@ Installed by `agentcodehandoff init --install-wrappers`:
 5. Use `done`, `blocked`, or `review` so progress reads like a workflow, not raw chat.
 6. Resolve claims with `completed`, `blocked`, or `abandoned` when work closes out.
 7. Use `agentcodehandoff status` to inspect latest handoffs, workflow events, open claims, and recently resolved claims.
+
+## Terminal Dashboard
+
+`agentcodehandoff-dashboard` is the fastest way to understand live system state in one terminal.
+
+It shows:
+
+- bridge health for Codex and Hermes
+- latest handoffs
+- workflow events like `request`, `blocked`, `review`, and `done`
+- open claims
+- claim conflicts
+- recently resolved claims
+- recent message traffic
 
 ## Auto Reply
 

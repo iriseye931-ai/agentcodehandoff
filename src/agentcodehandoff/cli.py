@@ -22,6 +22,7 @@ DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
 AUTOMATION_STALE_SECONDS = 30
 DASHBOARD_RECENT_MESSAGES = 8
 RECENT_WORKFLOW_MESSAGES = 6
+TERMINAL_FALLBACK_SIZE = (120, 40)
 
 
 def _now_iso() -> str:
@@ -451,6 +452,18 @@ def _print_conflicts(conflicts: list[dict[str, Any]]) -> None:
     print()
 
 
+def _generic_wrapper_script(kind: str) -> str:
+    if kind == "dashboard":
+        command = 'exec agentcodehandoff dashboard "$@"\n'
+    elif kind == "auto-status":
+        command = 'exec agentcodehandoff auto-status "$@"\n'
+    elif kind == "status":
+        command = 'exec agentcodehandoff status "$@"\n'
+    else:
+        raise ValueError(f"unsupported generic wrapper kind: {kind}")
+    return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
+
+
 def _wrapper_script(kind: str, agent: str) -> str:
     if kind == "watch":
         command = f'exec agentcodehandoff watch --agent "{agent}" "$@"\n'
@@ -515,6 +528,14 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
+    for kind in ("dashboard", "auto-status", "status"):
+        path = bin_dir / f"agentcodehandoff-{kind}"
+        if path.exists() and not force:
+            wrappers.append(path)
+            continue
+        path.write_text(_generic_wrapper_script(kind), encoding="utf-8")
+        path.chmod(0o755)
+        wrappers.append(path)
     for agent in ("codex", "hermes"):
         for kind in ("watch", "read", "auto", "send", "request", "claim", "done", "blocked", "review", "release"):
             path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
@@ -551,6 +572,110 @@ def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
     print()
 
 
+def _terminal_size() -> os.terminal_size:
+    return shutil.get_terminal_size(TERMINAL_FALLBACK_SIZE)
+
+
+def _truncate(value: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(value) <= width:
+        return value
+    if width <= 1:
+        return value[:width]
+    return value[: width - 1] + "…"
+
+
+def _message_summary_line(message: dict[str, Any], width: int) -> str:
+    role = str(message.get("role", "")).strip() or "handoff"
+    sender = str(message.get("from", "?")).strip() or "?"
+    recipient = str(message.get("to", "?")).strip() or "?"
+    summary = str(message.get("summary", "")).strip() or "(no summary)"
+    text = f"{sender}->{recipient} [{role}] {summary}"
+    return _truncate(text, width)
+
+
+def _claim_summary_line(claim: dict[str, Any], width: int) -> str:
+    agent = str(claim.get("agent", "?")).strip() or "?"
+    scope = str(claim.get("scope", "")).strip() or "(no scope)"
+    state = str(claim.get("state", "open")).strip() or "open"
+    files = claim.get("files") or []
+    suffix = f" :: {len(files)} file" if len(files) == 1 else f" :: {len(files)} files" if files else ""
+    return _truncate(f"{agent} [{state}] {scope}{suffix}", width)
+
+
+def _bridge_status_line(agent: str, state: dict[str, Any], width: int) -> str:
+    last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
+    now = datetime.now(timezone.utc)
+    alive = last_poll is not None and (now - last_poll).total_seconds() <= AUTOMATION_STALE_SECONDS
+    status = "alive" if alive else "stale"
+    seen_ids = state.get("seen_ids", [])
+    seen_count = len(seen_ids) if isinstance(seen_ids, list) else 0
+    last_reply = _parse_iso(str(state.get("last_reply_at", "")).strip())
+    reply_text = _format_timestamp(last_reply.isoformat()) if last_reply else "--:--:--"
+    text = f"{agent}: {status} | seen {seen_count} | reply {reply_text}"
+    return _truncate(text, width)
+
+
+def _conflict_lines(claims: list[dict[str, Any]], width: int, limit: int) -> list[str]:
+    lines: list[str] = []
+    open_claims = _open_claims(claims)
+    for index, claim in enumerate(open_claims):
+        remaining = open_claims[:index] + open_claims[index + 1 :]
+        conflicts = _claim_conflicts(remaining, claim)
+        if not conflicts:
+            continue
+        left = _truncate(f"{claim.get('agent', '?')}::{claim.get('scope', '') or '(no scope)'}", max(12, width // 2))
+        conflict = conflicts[0]
+        conflict_claim = conflict["claim"]
+        right = _truncate(
+            f"{conflict_claim.get('agent', '?')}::{conflict_claim.get('scope', '') or '(no scope)'}",
+            max(12, width // 2),
+        )
+        overlap_note = "same scope" if conflict["same_scope"] else ", ".join(conflict["overlapping_files"][:2]) or "file overlap"
+        lines.append(_truncate(f"{left} <-> {right} ({overlap_note})", width))
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _render_panel(title: str, rows: list[str], width: int, height: int | None = None) -> list[str]:
+    inner_width = max(10, width - 4)
+    top = f"+- {title} " + "-" * max(0, width - len(title) - 5) + "+"
+    lines = [top[:width], "|" + " " * (width - 2) + "|"]
+
+    content: list[str] = []
+    for row in rows:
+        wrapped = textwrap.wrap(str(row), width=inner_width) or [""]
+        content.extend(wrapped)
+
+    if height is not None:
+        usable = max(0, height - 3)
+        content = content[:usable]
+        while len(content) < usable:
+            content.append("")
+
+    for row in content:
+        lines.append(f"| {_truncate(row, inner_width).ljust(inner_width)} |")
+
+    lines.append("+" + "-" * (width - 2) + "+")
+    if height is not None and len(lines) > height:
+        return lines[:height]
+    return lines
+
+
+def _merge_columns(left: list[str], right: list[str], gap: int = 2) -> list[str]:
+    left_width = max((len(line) for line in left), default=0)
+    right_width = max((len(line) for line in right), default=0)
+    total = max(len(left), len(right))
+    merged: list[str] = []
+    for index in range(total):
+        left_line = left[index] if index < len(left) else " " * left_width
+        right_line = right[index] if index < len(right) else " " * right_width
+        merged.append(left_line.ljust(left_width) + (" " * gap) + right_line)
+    return merged
+
+
 def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
     messages = _read_messages(inbox_path)
     claims = _read_claims(claims_path)
@@ -560,73 +685,78 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
         if sender:
             latest_by_agent[sender] = message
 
+    size = _terminal_size()
+    total_width = max(80, size.columns)
+    left_width = max(38, (total_width - 2) // 2)
+    right_width = max(38, total_width - left_width - 2)
+    timestamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
     lines: list[str] = []
-    lines.append("AgentCodeHandoff Dashboard")
-    lines.append("=" * 80)
+    lines.append("AgentCodeHandoff")
+    lines.append("=" * total_width)
+    lines.append(_truncate(f"Shared coordination for coding agents | {timestamp} | home {home}", total_width))
     lines.append("")
-    lines.append("Latest handoffs")
+
+    bridge_rows = []
+    for agent in ("codex", "hermes"):
+        state = _read_automation_state(_automation_state_path(home, agent))
+        bridge_rows.append(_bridge_status_line(agent, state, left_width - 4))
+    if not bridge_rows:
+        bridge_rows = ["No bridge state yet"]
+
+    handoff_rows = []
     for agent in ("codex", "hermes"):
         message = latest_by_agent.get(agent)
         if message:
-            lines.append(f"- {agent}: {message.get('summary', '')}")
+            handoff_rows.append(_truncate(f"{agent}: {message.get('summary', '')}", right_width - 4))
         else:
-            lines.append(f"- {agent}: waiting")
+            handoff_rows.append(f"{agent}: waiting")
+    summary_row = _merge_columns(
+        _render_panel("Auto Bridges", bridge_rows, left_width, height=6),
+        _render_panel("Latest Handoffs", handoff_rows, right_width, height=6),
+    )
+    lines.extend(summary_row)
     lines.append("")
-    lines.append("Auto bridges")
-    for agent in ("codex", "hermes"):
-        state = _read_automation_state(_automation_state_path(home, agent))
-        last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
-        now = datetime.now(timezone.utc)
-        alive = last_poll is not None and (now - last_poll).total_seconds() <= AUTOMATION_STALE_SECONDS
-        lines.append(f"- {agent}: {'alive' if alive else 'stale'}")
-    lines.append("")
-    lines.append("Workflow")
+
     workflow_messages = [
         message for message in messages
         if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review"}
     ][-RECENT_WORKFLOW_MESSAGES:]
-    if workflow_messages:
-        for message in workflow_messages:
-            lines.append(
-                f"- {message.get('from', '?')} -> {message.get('to', '?')} :: "
-                f"{message.get('role', '')} :: {message.get('summary', '')}"
-            )
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append("Open claims")
     open_claims = _open_claims(claims)
-    if open_claims:
-        for claim in open_claims:
-            files = ", ".join(str(item) for item in (claim.get("files") or []))
-            lines.append(f"- {claim.get('agent', '?')} :: {claim.get('scope', '')} :: {files or 'no files'}")
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append("Recently resolved claims")
     resolved_claims = _resolved_claims(claims)[-4:]
-    if resolved_claims:
-        for claim in resolved_claims:
-            lines.append(
-                f"- {claim.get('agent', '?')} :: {claim.get('scope', '')} :: "
-                f"{claim.get('state', 'released')}"
-            )
-    else:
-        lines.append("- none")
+    workflow_rows = [_message_summary_line(message, left_width - 4) for message in workflow_messages] or ["No workflow events"]
+    claim_rows = [_claim_summary_line(claim, right_width - 4) for claim in open_claims] or ["No open claims"]
+    lines.extend(
+        _merge_columns(
+            _render_panel("Workflow", workflow_rows, left_width, height=10),
+            _render_panel("Open Claims", claim_rows, right_width, height=10),
+        )
+    )
     lines.append("")
-    lines.append("Recent messages")
+
+    conflict_rows = _conflict_lines(claims, left_width - 4, limit=4) or ["No claim conflicts"]
+    resolved_rows = [_claim_summary_line(claim, right_width - 4) for claim in resolved_claims] or ["No resolved claims"]
+    lines.extend(
+        _merge_columns(
+            _render_panel("Conflicts", conflict_rows, left_width, height=8),
+            _render_panel("Recently Resolved", resolved_rows, right_width, height=8),
+        )
+    )
+    lines.append("")
+
+    recent_rows: list[str] = []
     for message in messages[-DASHBOARD_RECENT_MESSAGES:]:
-        header = f"[{_format_timestamp(str(message.get('timestamp', '')))}] {message.get('from', '?')} -> {message.get('to', '?')} :: {message.get('role', '')}"
-        lines.append(header)
-        summary = str(message.get("summary", "")).strip()
-        if summary:
-            lines.append(f"  {summary}")
+        recent_rows.append(_truncate(
+            f"[{_format_timestamp(str(message.get('timestamp', '')))}] {message.get('from', '?')}->{message.get('to', '?')} [{message.get('role', '')}] {message.get('summary', '')}",
+            total_width - 4,
+        ))
         details = str(message.get("details", "")).strip()
         if details:
-            for wrapped in textwrap.wrap(details, width=74):
-                lines.append(f"  {wrapped}")
+            recent_rows.append(_truncate(f"  {details}", total_width - 4))
+    recent_rows = recent_rows or ["No messages yet"]
+    lines.extend(_render_panel("Recent Messages", recent_rows, total_width, height=min(14, max(8, size.lines - 28))))
     lines.append("")
-    lines.append("Press Ctrl-C to exit.")
+    lines.append("Ctrl-C to exit")
     return "\n".join(lines)
 
 
