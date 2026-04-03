@@ -1,19 +1,61 @@
 <svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="256" height="256" rx="56" fill="#0B1020"/>
-  <rect x="24" y="24" width="208" height="208" rx="40" stroke="#2C3E63" stroke-width="2"/>
-  <path d="M79 88C79 80.8203 84.8203 75 92 75H164C171.18 75 177 80.8203 177 88V168C177 175.18 171.18 181 164 181H92C84.8203 181 79 175.18 79 168V88Z" fill="url(#paint0_linear_1_2)"/>
-  <path d="M98 104H158" stroke="#9BD6FF" stroke-width="8" stroke-linecap="round"/>
-  <path d="M98 128H137" stroke="#9BD6FF" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
-  <path d="M98 152H151" stroke="#9BD6FF" stroke-width="8" stroke-linecap="round" opacity="0.7"/>
-  <circle cx="182" cy="86" r="20" fill="#111A31" stroke="#7FDBFF" stroke-width="3"/>
-  <circle cx="182" cy="86" r="7" fill="#7FDBFF"/>
-  <path d="M182 111V137" stroke="#7FDBFF" stroke-width="3" stroke-linecap="round"/>
-  <path d="M153 86H129" stroke="#7FDBFF" stroke-width="3" stroke-linecap="round"/>
-  <path d="M182 137C182 148.046 173.046 157 162 157H146" stroke="#7FDBFF" stroke-width="3" stroke-linecap="round"/>
   <defs>
-    <linearGradient id="paint0_linear_1_2" x1="128" y1="75" x2="128" y2="181" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#15213B"/>
-      <stop offset="1" stop-color="#0D1427"/>
+    <linearGradient id="bg" x1="24" y1="20" x2="222" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#09111F"/>
+      <stop offset="1" stop-color="#050A14"/>
     </linearGradient>
+    <linearGradient id="panel" x1="128" y1="56" x2="128" y2="200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101C33"/>
+      <stop offset="1" stop-color="#0A1325"/>
+    </linearGradient>
+    <linearGradient id="link" x1="80" y1="64" x2="182" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9BE7FF"/>
+      <stop offset="1" stop-color="#4DAFFF"/>
+    </linearGradient>
+    <filter id="glow" x="-40" y="-40" width="336" height="336" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <rect x="18" y="18" width="220" height="220" rx="38" stroke="#1D3150" stroke-width="2"/>
+  <path d="M52 78H108" stroke="#1D3150" stroke-width="2" stroke-linecap="round"/>
+  <path d="M148 78H204" stroke="#1D3150" stroke-width="2" stroke-linecap="round"/>
+  <path d="M52 178H102" stroke="#1D3150" stroke-width="2" stroke-linecap="round"/>
+  <path d="M154 178H204" stroke="#1D3150" stroke-width="2" stroke-linecap="round"/>
+  <path d="M40 64L60 44H112" stroke="#274268" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M144 44H196L216 64" stroke="#274268" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M40 192L60 212H112" stroke="#274268" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M144 212H196L216 192" stroke="#274268" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="56" y="56" width="144" height="144" rx="28" fill="url(#panel)" stroke="#29446B" stroke-width="2"/>
+  <path d="M128 80V176" stroke="#1B2F4C" stroke-width="2"/>
+  <path d="M80 128H176" stroke="#1B2F4C" stroke-width="2"/>
+  <circle cx="128" cy="128" r="44" stroke="#203655" stroke-width="2"/>
+
+  <g filter="url(#glow)">
+    <path d="M128 128L86 92" stroke="url(#link)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M128 128L168 88" stroke="url(#link)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M128 128L170 166" stroke="url(#link)" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <circle cx="128" cy="128" r="22" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="4"/>
+  <circle cx="128" cy="128" r="8" fill="#EAFBFF"/>
+  <circle cx="128" cy="128" r="28" stroke="#6BCBFF" stroke-opacity="0.35" stroke-width="2"/>
+
+  <circle cx="86" cy="92" r="16" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="3"/>
+  <circle cx="168" cy="88" r="16" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="3"/>
+  <circle cx="170" cy="166" r="16" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="3"/>
+  <circle cx="86" cy="92" r="5" fill="#8ADFFF"/>
+  <circle cx="168" cy="88" r="5" fill="#8ADFFF"/>
+  <circle cx="170" cy="166" r="5" fill="#8ADFFF"/>
+
+  <path d="M78 154H115" stroke="#7BD8FF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M78 170H102" stroke="#7BD8FF" stroke-width="6" stroke-linecap="round" opacity="0.8"/>
+  <path d="M142 154H176" stroke="#7BD8FF" stroke-width="6" stroke-linecap="round" opacity="0.85"/>
+  <path d="M142 170H163" stroke="#7BD8FF" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
 </svg>
