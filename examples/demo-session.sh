@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TMP_HOME="${1:-/tmp/agents-inbox-demo}"
-BIN_DIR="${2:-/tmp/agents-inbox-demo-bin}"
-CLI="python3 $(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src/agents_inbox/cli.py"
+TMP_HOME="${1:-/tmp/agentcodehandoff-demo}"
+BIN_DIR="${2:-/tmp/agentcodehandoff-demo-bin}"
+CLI="python3 $(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src/agentcodehandoff/cli.py"
 
 rm -rf "$TMP_HOME" "$BIN_DIR"
 
@@ -19,9 +19,9 @@ $CLI --home "$TMP_HOME" claim \
   --files "src/app.tsx,src/layout.tsx"
 
 echo
-echo "== claude handoff =="
+echo "== hermes handoff =="
 $CLI --home "$TMP_HOME" send \
-  --from-agent claude \
+  --from-agent hermes \
   --to-agent codex \
   --summary "Sphere pass complete" \
   --details "Mesh graph glow and panel chrome are ready for integration." \

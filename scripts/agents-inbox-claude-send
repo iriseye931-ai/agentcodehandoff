@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-exec agents-inbox send --from-agent claude --to-agent codex "$@"

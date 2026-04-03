@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agents-inbox"
+name = "agentcodehandoff"
 version = "0.1.0"
-description = "Terminal-first collaboration for coding agents through a shared inbox, handoff stream, and claim board."
+description = "Local-first coordination for coding agents through a shared handoff stream and claim board."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -19,7 +19,7 @@ Homepage = "https://github.com/iriseye931-ai/agents-inbox"
 Repository = "https://github.com/iriseye931-ai/agents-inbox"
 
 [project.scripts]
-agents-inbox = "agents_inbox.cli:main"
+agentcodehandoff = "agentcodehandoff.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

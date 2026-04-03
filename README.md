@@ -1,20 +1,20 @@
 <p align="center">
-  <img src="assets/agents-inbox-mark.svg" alt="Agents Inbox" width="96" height="96" />
+  <img src="assets/agentcodehandoff-mark.svg" alt="AgentCodeHandoff" width="96" height="96" />
 </p>
 
-<h1 align="center">Agents Inbox</h1>
+<h1 align="center">AgentCodeHandoff</h1>
 
-<p align="center"><strong>Professional coordination for coding agents.</strong></p>
+<p align="center"><strong>Private coordination for coding agents.</strong></p>
 
 <p align="center">
-  <em>A local-first shared inbox, handoff stream, and claim board for Codex, Claude Code, and other terminal agents.</em>
+  <em>A local-first shared handoff stream and claim board for Codex, Hermes, and other terminal agents.</em>
 </p>
 
-`agents-inbox` gives multiple coding agents one professional coordination layer inside a shared repo: clear handoffs, explicit ownership, and a durable local record of who is doing what.
+`agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, and a durable local record of who is doing what.
 
 It is built for teams running:
 
-- Codex + Claude Code
+- Codex + Hermes
 - two or more agent terminals on one machine
 - one shared codebase
 - a zero-infrastructure workflow
@@ -28,10 +28,10 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - no quick way to see who is doing what
 - too much manual relaying between terminals
 
-`agents-inbox` fixes that with a small, explicit local state model:
+`agentcodehandoff` fixes that with a small, explicit local state model:
 
-- `~/.agents-inbox/inbox.jsonl`
-- `~/.agents-inbox/claims.json`
+- `~/.agentcodehandoff/inbox.jsonl`
+- `~/.agentcodehandoff/claims.json`
 
 ## What It Includes
 
@@ -59,21 +59,21 @@ Try a disposable end-to-end demo:
 ## First Run
 
 ```bash
-agents-inbox doctor
-agents-inbox status
+agentcodehandoff doctor
+agentcodehandoff status
 ```
 
 Start two terminals:
 
 ```bash
-agents-inbox-codex-watch
-agents-inbox-claude-watch
+agentcodehandoff-codex-watch
+agentcodehandoff-hermes-watch
 ```
 
 Send a handoff:
 
 ```bash
-agents-inbox-codex-send \
+agentcodehandoff-codex-send \
   --summary "Need a realism pass" \
   --details "Own MeshGraph.tsx only" \
   --files "frontend/src/components/MeshGraph.tsx"
@@ -82,7 +82,7 @@ agents-inbox-codex-send \
 Claim a scope:
 
 ```bash
-agents-inbox-claude-claim \
+agentcodehandoff-hermes-claim \
   --scope meshgraph-pass \
   --summary "Owning cinematic sphere polish" \
   --files "frontend/src/components/MeshGraph.tsx"
@@ -91,13 +91,13 @@ agents-inbox-claude-claim \
 ## Core Commands
 
 ```bash
-agents-inbox init --install-wrappers --seed
-agents-inbox doctor
-agents-inbox read --agent codex
-agents-inbox watch --agent claude
-agents-inbox latest --agent claude
-agents-inbox status
-agents-inbox claims
+agentcodehandoff init --install-wrappers --seed
+agentcodehandoff doctor
+agentcodehandoff read --agent codex
+agentcodehandoff watch --agent hermes
+agentcodehandoff latest --agent hermes
+agentcodehandoff status
+agentcodehandoff claims
 ```
 
 ## Demo
@@ -112,18 +112,18 @@ agents-inbox claims
 
 ## Wrapper Commands
 
-Installed by `agents-inbox init --install-wrappers`:
+Installed by `agentcodehandoff init --install-wrappers`:
 
-- `agents-inbox-codex-watch`
-- `agents-inbox-claude-watch`
-- `agents-inbox-codex-read`
-- `agents-inbox-claude-read`
-- `agents-inbox-codex-send`
-- `agents-inbox-claude-send`
-- `agents-inbox-codex-claim`
-- `agents-inbox-claude-claim`
-- `agents-inbox-codex-release`
-- `agents-inbox-claude-release`
+- `agentcodehandoff-codex-watch`
+- `agentcodehandoff-hermes-watch`
+- `agentcodehandoff-codex-read`
+- `agentcodehandoff-hermes-read`
+- `agentcodehandoff-codex-send`
+- `agentcodehandoff-hermes-send`
+- `agentcodehandoff-codex-claim`
+- `agentcodehandoff-hermes-claim`
+- `agentcodehandoff-codex-release`
+- `agentcodehandoff-hermes-release`
 
 ## Typical Workflow
 
@@ -131,17 +131,17 @@ Installed by `agents-inbox init --install-wrappers`:
 2. Agent B claims a non-overlapping scope.
 3. Both agents keep `watch` running.
 4. Each agent sends concise handoffs after bounded work.
-5. Use `agents-inbox status` to inspect latest handoffs and open claims.
+5. Use `agentcodehandoff status` to inspect latest handoffs and open claims.
 
 ## Configuration
 
-- Default state directory: `~/.agents-inbox`
-- Override with `AGENTS_INBOX_HOME`
+- Default state directory: `~/.agentcodehandoff`
+- Override with `AGENTCODEHANDOFF_HOME`
 - Default wrapper directory: `~/.local/bin`
 
 ## Positioning
 
-`agents-inbox` is intentionally narrow:
+`agentcodehandoff` is intentionally narrow:
 
 - not a cloud orchestration platform
 - not a task router with hidden state

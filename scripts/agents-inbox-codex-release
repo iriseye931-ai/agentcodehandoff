@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-exec agents-inbox release --agent codex "$@"

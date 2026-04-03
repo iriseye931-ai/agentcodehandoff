@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 
-ENV_HOME = "AGENTS_INBOX_HOME"
-DEFAULT_HOME = Path(os.environ.get(ENV_HOME, Path.home() / ".agents-inbox")).expanduser()
+ENV_HOME = "AGENTCODEHANDOFF_HOME"
+DEFAULT_HOME = Path(os.environ.get(ENV_HOME, Path.home() / ".agentcodehandoff")).expanduser()
 DEFAULT_INBOX_PATH = DEFAULT_HOME / "inbox.jsonl"
 DEFAULT_CLAIMS_PATH = DEFAULT_HOME / "claims.json"
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
@@ -150,21 +150,21 @@ def _print_claim(claim: dict[str, Any]) -> None:
 
 def _wrapper_script(kind: str, agent: str) -> str:
     if kind == "watch":
-        command = f'exec agents-inbox watch --agent "{agent}" "$@"\n'
+        command = f'exec agentcodehandoff watch --agent "{agent}" "$@"\n'
     elif kind == "read":
-        command = f'exec agents-inbox read --agent "{agent}" "$@"\n'
+        command = f'exec agentcodehandoff read --agent "{agent}" "$@"\n'
     elif kind == "claim":
-        command = f'exec agents-inbox claim --agent "{agent}" "$@"\n'
+        command = f'exec agentcodehandoff claim --agent "{agent}" "$@"\n'
     elif kind == "release":
-        command = f'exec agents-inbox release --agent "{agent}" "$@"\n'
+        command = f'exec agentcodehandoff release --agent "{agent}" "$@"\n'
     elif kind == "send":
-        default_to = "claude" if agent == "codex" else "codex"
+        default_to = "hermes" if agent == "codex" else "codex"
         command = (
             'if [ "$#" -lt 1 ]; then\n'
-            f'  echo "usage: agents-inbox-{agent}-send --summary <text> [extra args]" >&2\n'
+            f'  echo "usage: agentcodehandoff-{agent}-send --summary <text> [extra args]" >&2\n'
             "  exit 1\n"
             "fi\n"
-            f'exec agents-inbox send --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
+            f'exec agentcodehandoff send --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
         )
     else:
         raise ValueError(f"unsupported wrapper kind: {kind}")
@@ -174,9 +174,9 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for agent in ("codex", "claude"):
+    for agent in ("codex", "hermes"):
         for kind in ("watch", "read", "send", "claim", "release"):
-            path = bin_dir / f"agents-inbox-{agent}-{kind}"
+            path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
             if path.exists() and not force:
                 wrappers.append(path)
                 continue
@@ -375,7 +375,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             failures += 1
 
     warnings = [
-        ("agents-inbox on PATH", shutil.which("agents-inbox") is not None, shutil.which("agents-inbox") or "not found"),
+        ("agentcodehandoff on PATH", shutil.which("agentcodehandoff") is not None, shutil.which("agentcodehandoff") or "not found"),
         (
             f"bin dir on PATH: {args.bin_dir}",
             str(args.bin_dir) in os.environ.get("PATH", "").split(":"),
@@ -383,9 +383,9 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         ),
     ]
 
-    for agent in ("codex", "claude"):
+    for agent in ("codex", "hermes"):
         for kind in ("watch", "send"):
-            wrapper_path = args.bin_dir / f"agents-inbox-{agent}-{kind}"
+            wrapper_path = args.bin_dir / f"agentcodehandoff-{agent}-{kind}"
             warnings.append(
                 (
                     f"wrapper: {wrapper_path.name}",
@@ -399,7 +399,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     if failures:
         print()
-        print("Run `agents-inbox init --install-wrappers` to create state and wrapper scripts.")
+        print("Run `agentcodehandoff init --install-wrappers` to create state and wrapper scripts.")
         raise SystemExit(1)
 
     if any(not ok for _, ok, _ in warnings):
@@ -409,13 +409,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Shared inbox and claim board for coding agents")
-    parser.add_argument("--home", type=Path, default=DEFAULT_HOME, help=f"state directory (default: ${ENV_HOME} or ~/.agents-inbox)")
+    parser.add_argument("--home", type=Path, default=DEFAULT_HOME, help=f"state directory (default: ${ENV_HOME} or ~/.agentcodehandoff)")
     parser.add_argument("--inbox-path", type=Path, default=DEFAULT_INBOX_PATH, help="shared inbox file path")
     parser.add_argument("--claims-path", type=Path, default=DEFAULT_CLAIMS_PATH, help="shared claims file path")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="create local state and optional shell wrappers")
-    init_parser.add_argument("--agents", nargs="+", default=["codex", "claude"])
+    init_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     init_parser.add_argument("--seed", action="store_true", help="seed bootstrap messages for agents")
     init_parser.add_argument("--install-wrappers", action="store_true", help="install helper wrapper scripts into the bin dir")
     init_parser.add_argument("--force", action="store_true", help="overwrite existing wrapper scripts")
@@ -443,7 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.set_defaults(func=cmd_watch)
 
     status_parser = subparsers.add_parser("status", help="show latest handoffs per agent and current claims")
-    status_parser.add_argument("--agents", nargs="+", default=["codex", "claude"])
+    status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     status_parser.set_defaults(func=cmd_status)
 
     send_parser = subparsers.add_parser("send", help="send an agent handoff")
