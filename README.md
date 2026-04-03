@@ -130,6 +130,12 @@ agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
 ```
 
+Or apply the built-in trio preset in one step:
+
+```bash
+agentcodehandoff bridge-preset-apply --name local-trio --repo /path/to/repo --start
+```
+
 Inspect supervised bridge health:
 
 ```bash

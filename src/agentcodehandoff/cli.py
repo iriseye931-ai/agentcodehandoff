@@ -322,6 +322,46 @@ def _bridge_runtime_settings(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _template_agent_settings(agent: str, repo: Path) -> dict[str, Any]:
+    base = {
+        "repo": str(repo),
+        "interval": 2.0,
+        "claim_on_files": False,
+        "claim_scope_prefix": "auto-",
+        "auto_sweep": True,
+        "sweep_interval": 30.0,
+        "max_restarts": 5,
+        "cool_off_seconds": float(BRIDGE_COOL_OFF_SECONDS),
+    }
+    if agent == "hermes":
+        base["claim_on_files"] = True
+    if agent == "claude":
+        base["interval"] = 3.0
+    return base
+
+
+def _built_in_templates(repo: Path) -> dict[str, dict[str, Any]]:
+    return {
+        "local-pair": {
+            "name": "local-pair",
+            "description": "Codex and Hermes local collaboration defaults",
+            "agents": {
+                "codex": _template_agent_settings("codex", repo),
+                "hermes": _template_agent_settings("hermes", repo),
+            },
+        },
+        "local-trio": {
+            "name": "local-trio",
+            "description": "Codex, Hermes, and Claude local collaboration defaults",
+            "agents": {
+                "codex": _template_agent_settings("codex", repo),
+                "hermes": _template_agent_settings("hermes", repo),
+                "claude": _template_agent_settings("claude", repo),
+            },
+        },
+    }
+
+
 def _append_bridge_event(path: Path, event_type: str, summary: str, *, detail: str = "") -> None:
     payload = _read_bridge_lock(path)
     history = payload.get("recent_events", [])
@@ -3086,6 +3126,11 @@ def cmd_bridge_profile_delete(args: argparse.Namespace) -> None:
 
 def cmd_bridge_presets(args: argparse.Namespace) -> None:
     presets = _read_bridge_presets(_bridge_presets_path(args.home))
+    built_ins = _built_in_templates(args.repo)
+    if args.include_builtins:
+        for name, payload in built_ins.items():
+            if name not in presets:
+                presets[name] = payload
     if not presets:
         print("no bridge presets")
         return
@@ -3105,6 +3150,7 @@ def cmd_bridge_presets(args: argparse.Namespace) -> None:
 
 def cmd_bridge_preset_show(args: argparse.Namespace) -> None:
     presets = _read_bridge_presets(_bridge_presets_path(args.home))
+    presets.update({name: payload for name, payload in _built_in_templates(args.repo).items() if name not in presets})
     payload = presets.get(args.name)
     if not isinstance(payload, dict):
         raise SystemExit(f"no bridge preset named {args.name}")
@@ -3142,6 +3188,7 @@ def cmd_bridge_preset_save(args: argparse.Namespace) -> None:
 
 def cmd_bridge_preset_apply(args: argparse.Namespace) -> None:
     presets = _read_bridge_presets(_bridge_presets_path(args.home))
+    presets.update({name: payload for name, payload in _built_in_templates(args.repo).items() if name not in presets})
     payload = presets.get(args.name)
     if not isinstance(payload, dict):
         raise SystemExit(f"no bridge preset named {args.name}")
@@ -3823,10 +3870,13 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_profiles_parser.set_defaults(func=cmd_bridge_profiles)
 
     bridge_presets_parser = subparsers.add_parser("bridge-presets", help="list saved bridge presets")
+    bridge_presets_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo path used for built-in preset defaults")
+    bridge_presets_parser.add_argument("--include-builtins", action="store_true", help="include built-in presets like local-pair and local-trio")
     bridge_presets_parser.set_defaults(func=cmd_bridge_presets)
 
     bridge_preset_show_parser = subparsers.add_parser("bridge-preset-show", help="show one saved bridge preset")
     bridge_preset_show_parser.add_argument("--name", required=True)
+    bridge_preset_show_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo path used for built-in preset defaults")
     bridge_preset_show_parser.set_defaults(func=cmd_bridge_preset_show)
 
     bridge_preset_save_parser = subparsers.add_parser("bridge-preset-save", help="save the current bridge profiles as a named preset")
