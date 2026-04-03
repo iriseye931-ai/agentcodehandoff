@@ -1602,14 +1602,16 @@ def _ops_actions(home: Path, inbox_path: Path, claims_path: Path, sessions_path:
     for session in _active_sessions(sessions):
         drift = _session_drift(session, claims)
         if drift["status"] in {"drift", "unscoped", "missing"}:
+            remediations = _session_remediations(session, drift, claims)
             actions.append(
                 {
                     "priority": 40,
-                    "kind": "session-drift",
+                    "kind": "session-remediate",
                     "summary": f"Review drift for {session.get('agent', '?')}::{session.get('scope', '')}",
                     "detail": _session_drift_summary_line(session, drift, 120),
                     "agent": str(session.get("agent", "")).strip(),
                     "scope": str(session.get("scope", "")).strip(),
+                    "action": str(remediations[0].get("type", "auto")).strip() if remediations else "auto",
                 }
             )
 
@@ -3196,6 +3198,20 @@ def cmd_ops_next(args: argparse.Namespace) -> None:
         cmd_request_resolve(resolve_args)
         return
 
+    if kind == "session-remediate":
+        remediate_args = argparse.Namespace(
+            claims_path=args.claims_path,
+            sessions_path=args.sessions_path,
+            inbox_path=args.inbox_path,
+            agent=str(action.get("agent", "")).strip(),
+            scope=str(action.get("scope", "")).strip(),
+            action=str(action.get("action", "auto")).strip() or "auto",
+            create_session=args.create_session,
+            dry_run=False,
+        )
+        cmd_remediate(remediate_args)
+        return
+
     print("no safe auto-apply for this action type")
 
 
@@ -3648,6 +3664,7 @@ def build_parser() -> argparse.ArgumentParser:
     ops_next_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS)
     ops_next_parser.add_argument("--force", action="store_true")
     ops_next_parser.add_argument("--limit", type=int, default=20)
+    ops_next_parser.add_argument("--create-session", action="store_true", help="when auto-remediating split work, create a new session if supported")
     ops_next_parser.set_defaults(func=cmd_ops_next)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")

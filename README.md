@@ -403,6 +403,7 @@ Ask the tool for the single most important next ops action:
 ```bash
 agentcodehandoff ops-next
 agentcodehandoff ops-next --apply
+agentcodehandoff ops-next --apply --create-session
 ```
 
 Apply a safe remediation automatically:
