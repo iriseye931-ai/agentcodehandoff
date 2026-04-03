@@ -233,11 +233,11 @@ Inspect request lifecycle state:
 agentcodehandoff requests
 ```
 
-Approve or close a tracked request explicitly:
+Resolve a tracked request explicitly:
 
 ```bash
-agentcodehandoff request-approve --request-id msg-123
-agentcodehandoff request-close --request-id msg-123
+agentcodehandoff request-resolve --request-id msg-123 --action approve
+agentcodehandoff request-resolve --request-id msg-123 --action close
 ```
 
 Sweep stale requests and apply timeout actions:
@@ -249,7 +249,7 @@ agentcodehandoff request-sweep
 Let supervised bridges recover their own stale requests automatically:
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep --sweep-interval 30
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep --sweep-interval 30 --max-restarts 5
 ```
 
 Apply a safe remediation automatically:

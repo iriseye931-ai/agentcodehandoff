@@ -32,6 +32,7 @@ BRIDGE_RESTART_MAX_DELAY = 30.0
 REQUEST_STALE_SECONDS = 300
 REQUEST_ESCALATE_SECONDS = 900
 BRIDGE_EVENT_HISTORY = 8
+BRIDGE_COOL_OFF_SECONDS = 300
 
 
 def _now_iso() -> str:
@@ -363,6 +364,22 @@ def _request_record_by_id(records: list[dict[str, Any]], request_id: str) -> dic
         if str(record.get("request_id", "")).strip() == needle:
             return record
     return None
+
+
+def _bridge_recent_restart_times(lock: dict[str, Any]) -> list[datetime]:
+    events = lock.get("recent_events", [])
+    if not isinstance(events, list):
+        return []
+    restart_times: list[datetime] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("type", "")).strip() not in {"child-exit", "startup-failed"}:
+            continue
+        timestamp = _parse_iso(str(event.get("timestamp", "")).strip())
+        if timestamp is not None:
+            restart_times.append(timestamp)
+    return restart_times
 
 
 def _pending_age_buckets(messages: list[dict[str, Any]]) -> dict[str, int]:
@@ -943,6 +960,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff request-close "$@"\n'
     elif kind == "request-escalate":
         command = 'exec agentcodehandoff request-escalate "$@"\n'
+    elif kind == "request-resolve":
+        command = 'exec agentcodehandoff request-resolve "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -1012,7 +1031,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "request-approve", "request-close", "request-escalate"):
+    for kind in ("dashboard", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "request-approve", "request-close", "request-escalate", "request-resolve"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1251,6 +1270,10 @@ def _supervisor_command_args(args: argparse.Namespace, agent: str, log_path: Pat
         command.append("--auto-sweep")
     if getattr(args, "sweep_interval", 0.0):
         command.extend(["--sweep-interval", str(args.sweep_interval)])
+    if getattr(args, "max_restarts", None) is not None:
+        command.extend(["--max-restarts", str(args.max_restarts)])
+    if getattr(args, "cool_off_seconds", None) is not None:
+        command.extend(["--cool-off-seconds", str(args.cool_off_seconds)])
     return command
 
 
@@ -1284,6 +1307,10 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
         last_sweep_at = str(status.get("last_sweep_at", "")).strip()
         if last_sweep_at:
             print(f"  last sweep: {_format_timestamp(last_sweep_at)}")
+    print(
+        f"  restart policy: max={int(lock.get('max_restarts', 0) or 0)}"
+        f" window={float(lock.get('cool_off_seconds', 0.0) or 0.0):.0f}s"
+    )
     last_exit_at = str(status.get("last_exit_at", "")).strip()
     if last_exit_at:
         print(f"  last exit: {_format_timestamp(last_exit_at)} code={status.get('last_exit_code', '')}")
@@ -1754,6 +1781,16 @@ def _cmd_request_action(args: argparse.Namespace) -> None:
         request_id=str(record.get("request_id", "")).strip(),
     )
     _print_message(outcome)
+
+
+def cmd_request_resolve(args: argparse.Namespace) -> None:
+    role_map = {
+        "approve": "approved",
+        "close": "closed",
+        "escalate": "escalated",
+    }
+    args.role = role_map[args.action]
+    _cmd_request_action(args)
 
 
 def cmd_route(args: argparse.Namespace) -> None:
@@ -2538,6 +2575,8 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
             "auto_sweep": bool(args.auto_sweep),
             "sweep_interval": float(args.sweep_interval),
             "last_sweep_at": "",
+            "max_restarts": int(args.max_restarts),
+            "cool_off_seconds": float(args.cool_off_seconds),
             "recent_events": history[-BRIDGE_EVENT_HISTORY:],
         },
     )
@@ -2602,6 +2641,8 @@ def cmd_bridge_restart(args: argparse.Namespace) -> None:
         verbose=args.verbose,
         auto_sweep=args.auto_sweep,
         sweep_interval=args.sweep_interval,
+        max_restarts=args.max_restarts,
+        cool_off_seconds=args.cool_off_seconds,
         pending_event=restart_event,
     )
     cmd_bridge_start(start_args)
@@ -2645,6 +2686,10 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                     "backoff_seconds": 0.0,
                     "last_error": str(exc)[:500],
                     "paused": True,
+                    "max_restarts": int(args.max_restarts),
+                    "cool_off_seconds": float(args.cool_off_seconds),
+                    "repo": str(args.repo),
+                    "log_path": str(log_path),
                 }
             )
             _write_bridge_lock(lock_path, current)
@@ -2670,6 +2715,8 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "auto_sweep": bool(args.auto_sweep),
                 "sweep_interval": float(args.sweep_interval),
                 "last_sweep_at": str(existing.get("last_sweep_at", "")).strip(),
+                "max_restarts": int(args.max_restarts),
+                "cool_off_seconds": float(args.cool_off_seconds),
                 "recent_events": existing.get("recent_events", []),
             },
         )
@@ -2726,6 +2773,17 @@ def cmd_supervise(args: argparse.Namespace) -> None:
         restart_count += 1
         backoff = min(BRIDGE_RESTART_MAX_DELAY, BRIDGE_RESTART_BASE_DELAY * (2 ** max(0, restart_count - 1)))
         hard_failure = _is_hard_failure(failure_class)
+        recent_restart_times = _bridge_recent_restart_times(_read_bridge_lock(lock_path))
+        now = datetime.now(timezone.utc)
+        within_window = [
+            stamp for stamp in recent_restart_times
+            if (now - stamp).total_seconds() <= float(args.cool_off_seconds)
+        ]
+        exceeded_restart_cap = int(args.max_restarts) > 0 and len(within_window) >= int(args.max_restarts)
+        if exceeded_restart_cap:
+            hard_failure = True
+            if not failure_class:
+                failure_class = "restart-limit"
         current = _read_bridge_lock(lock_path)
         current.update(
             {
@@ -2738,6 +2796,8 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "backoff_seconds": backoff,
                 "last_error": last_error,
                 "paused": hard_failure,
+                "max_restarts": int(args.max_restarts),
+                "cool_off_seconds": float(args.cool_off_seconds),
             }
         )
         _write_bridge_lock(lock_path, current)
@@ -2745,7 +2805,10 @@ def cmd_supervise(args: argparse.Namespace) -> None:
         if hard_failure and not args.always_restart:
             if args.verbose:
                 print(f"{args.agent} bridge entered paused state due to hard failure: {failure_class}", file=sys.stderr)
-            _append_bridge_event(lock_path, "paused", f"{args.agent} bridge paused", detail=f"hard failure {failure_class}")
+            detail = f"hard failure {failure_class}"
+            if exceeded_restart_cap:
+                detail = f"restart cap reached: {len(within_window)} exits within {float(args.cool_off_seconds):.0f}s"
+            _append_bridge_event(lock_path, "paused", f"{args.agent} bridge paused", detail=detail)
             return
         if args.verbose:
             print(f"{args.agent} bridge exited with {return_code}; restarting in {backoff:.1f}s", file=sys.stderr)
@@ -2915,6 +2978,8 @@ def build_parser() -> argparse.ArgumentParser:
     supervise_parser.add_argument("--always-restart", action="store_true")
     supervise_parser.add_argument("--auto-sweep", action="store_true", help="periodically recover stale requests owned by this agent")
     supervise_parser.add_argument("--sweep-interval", type=float, default=30.0, help="seconds between automatic stale-request sweeps")
+    supervise_parser.add_argument("--max-restarts", type=int, default=5, help="pause the supervisor after this many exits within the cool-off window")
+    supervise_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS, help="restart counting window for max-restarts")
     supervise_parser.set_defaults(func=cmd_supervise)
 
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
@@ -2934,6 +2999,8 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_start_parser.add_argument("--verbose", action="store_true")
     bridge_start_parser.add_argument("--auto-sweep", action="store_true", help="periodically recover stale requests owned by this agent")
     bridge_start_parser.add_argument("--sweep-interval", type=float, default=30.0, help="seconds between automatic stale-request sweeps")
+    bridge_start_parser.add_argument("--max-restarts", type=int, default=5, help="pause the supervisor after this many exits within the cool-off window")
+    bridge_start_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS, help="restart counting window for max-restarts")
     bridge_start_parser.set_defaults(func=cmd_bridge_start)
 
     bridge_stop_parser = subparsers.add_parser("bridge-stop", help="stop a supervised background bridge for an agent")
@@ -2952,6 +3019,8 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_restart_parser.add_argument("--timeout", type=float, default=3.0)
     bridge_restart_parser.add_argument("--auto-sweep", action="store_true", help="periodically recover stale requests owned by this agent")
     bridge_restart_parser.add_argument("--sweep-interval", type=float, default=30.0, help="seconds between automatic stale-request sweeps")
+    bridge_restart_parser.add_argument("--max-restarts", type=int, default=5, help="pause the supervisor after this many exits within the cool-off window")
+    bridge_restart_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS, help="restart counting window for max-restarts")
     bridge_restart_parser.set_defaults(func=cmd_bridge_restart)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")
@@ -3062,6 +3131,16 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--details", default="", help="optional override details")
         action_parser.add_argument("--task", default="", help="optional override task")
         action_parser.set_defaults(func=_cmd_request_action, role=role_name)
+
+    request_resolve_parser = subparsers.add_parser("request-resolve", help="resolve a tracked request with approve, close, or escalate")
+    request_resolve_parser.add_argument("--request-id", required=True)
+    request_resolve_parser.add_argument("--action", required=True, choices=["approve", "close", "escalate"])
+    request_resolve_parser.add_argument("--from-agent", default="", help="defaults to the request assignee")
+    request_resolve_parser.add_argument("--to-agent", default="", help="defaults to the original requester")
+    request_resolve_parser.add_argument("--summary", default="", help="optional override summary")
+    request_resolve_parser.add_argument("--details", default="", help="optional override details")
+    request_resolve_parser.add_argument("--task", default="", help="optional override task")
+    request_resolve_parser.set_defaults(func=cmd_request_resolve)
 
     route_parser = subparsers.add_parser("route", help="recommend Codex or Hermes for a request")
     route_parser.add_argument("--summary", required=True)
