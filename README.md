@@ -4,20 +4,27 @@
 
 <h1 align="center">AgentCodeHandoff</h1>
 
-<p align="center"><strong>Private coordination for coding agents.</strong></p>
+<p align="center"><strong>Local control plane for coding agents.</strong></p>
 
 <p align="center">
-  <em>A local-first shared handoff stream and claim board for Codex, Hermes, and other terminal agents.</em>
+  <em>A local-first shared handoff, supervision, and ops layer for Codex, Claude Code, Hermes, and other terminal agents.</em>
 </p>
 
-`agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, workflow-state updates, and a durable local record of who is doing what.
+`agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, supervised bridge processes, workflow-state updates, and a durable local record of who is doing what.
 
 It is built for teams running:
 
-- Codex + Hermes
+- Codex + Claude + Hermes
 - two or more agent terminals on one machine
 - one shared codebase
 - a zero-infrastructure workflow
+
+It now supports:
+
+- 3-agent supervised team startup with `local-trio`
+- availability-aware routing and graceful fallback when one agent is rate-limited or offline
+- interactive terminal ops for recovery, sweeping, and request resolution
+- live-verified Claude bridge replies via structured JSON output
 
 ## Why Teams Need It
 
@@ -38,16 +45,32 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 - Shared inbox for agent-to-agent handoffs
 - Lightweight claim board for file and scope ownership
+- Availability-aware routing across Codex, Hermes, and Claude
 - Workflow updates for `request`, `done`, `blocked`, and `review`
+- Request lifecycle tracking with `acknowledged`, `done`, `blocked`, `review`, `closed`, `approved`, and `escalated`
 - Claim resolution with final states like `completed`, `blocked`, and `abandoned`
 - Git worktree-backed agent sessions for isolated edit space
 - File-awareness checks that compare live session edits to claimed files
+- Drift suggestions and safe remediation for expand, handoff, and split-work flows
 - Supervised bridge lifecycle commands with pid, heartbeat, and pending request visibility
+- Saved bridge profiles, reusable presets, and one-command team lifecycle controls
 - Automatic timeout recovery with reminders, reroutes, and escalation when safe recovery is exhausted
 - Terminal-first workflow for two or more agents in one repo
-- Paneled terminal dashboard for bridge health, workflow, claims, conflicts, and recent messages
+- Paneled terminal dashboard for bridge health, workflow, requests, claims, conflicts, and recent messages
+- Interactive ops dashboard with direct recovery and request-resolution shortcuts
 - Local-first state with no daemon required
 - Agent-specific wrapper commands for faster day-to-day use
+
+## Current State
+
+This repo is no longer just a shared inbox prototype. The current build supports:
+
+- local pair and local trio presets
+- supervised `up` / `down` / `restart-team` lifecycle commands
+- persistent bridge recovery profiles
+- interactive operator controls from the terminal dashboard
+- explicit availability overrides for rate-limited or offline agents
+- live trio verification with Codex, Hermes, and Claude
 
 ## Quick Start
 
@@ -67,11 +90,11 @@ Try a disposable end-to-end demo:
 For the full supervised collaboration path, start with:
 
 1. `agentcodehandoff doctor`
-2. `agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep`
-3. `agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep`
-4. `agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep`
-5. `agentcodehandoff dashboard --view ops`
-6. `agentcodehandoff bridge-status`
+2. `agentcodehandoff up --template local-trio --repo /path/to/repo`
+3. `agentcodehandoff dashboard --view ops --interactive`
+4. `agentcodehandoff bridge-status`
+5. `agentcodehandoff requests`
+6. `agentcodehandoff availability`
 
 If you are the second collaborator terminal, keep this shorter loop:
 
@@ -143,6 +166,8 @@ agentcodehandoff up --template local-trio --repo /path/to/repo
 agentcodehandoff down --template local-trio --repo /path/to/repo
 agentcodehandoff restart-team --template local-trio --repo /path/to/repo
 ```
+
+The `local-trio` flow has been live-verified with Codex, Hermes, and Claude replying through supervised bridges.
 
 For live terminal operations, enable dashboard actions:
 
