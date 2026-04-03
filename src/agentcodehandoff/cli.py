@@ -226,6 +226,7 @@ def _write_message(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "details": payload.get("details", ""),
         "files": payload.get("files", []),
         "request_id": payload.get("request_id", ""),
+        "derived_from_request_id": payload.get("derived_from_request_id", ""),
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
@@ -243,6 +244,7 @@ def _send_record(
     details: str,
     files: str | list[str] | None,
     request_id: str = "",
+    derived_from_request_id: str = "",
 ) -> dict[str, Any]:
     normalized_files = files if isinstance(files, list) else _split_files(files or "")
     return _write_message(
@@ -256,6 +258,7 @@ def _send_record(
             "details": details,
             "files": normalized_files,
             "request_id": request_id,
+            "derived_from_request_id": derived_from_request_id,
         },
     )
 
@@ -271,6 +274,11 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     requests = [
         message for message in messages
         if str(message.get("role", "")).strip().lower() in {"request", "task", "auto-request"}
+        and not str(message.get("derived_from_request_id", "")).strip()
+    ]
+    followups = [
+        message for message in messages
+        if str(message.get("derived_from_request_id", "")).strip()
     ]
     outcomes = [
         message for message in messages
@@ -324,6 +332,7 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "age_seconds": age_seconds,
                 "latest_outcome": latest_outcome,
                 "latest_handoff": latest_handoff,
+                "followups": [item for item in followups if str(item.get("derived_from_request_id", "")).strip() == request_id],
             }
         )
     return records
@@ -1101,6 +1110,9 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "automation_state": automation_state,
         "failure_class": str(lock.get("failure_class", "")).strip(),
         "restart_count": int(lock.get("restart_count", 0) or 0),
+        "auto_sweep": bool(lock.get("auto_sweep", False)),
+        "sweep_interval": float(lock.get("sweep_interval", 0.0) or 0.0),
+        "last_sweep_at": str(lock.get("last_sweep_at", "")).strip(),
     }
 
 
@@ -1112,10 +1124,12 @@ def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     paused = bool(status.get("lock", {}).get("paused", False)) if isinstance(status.get("lock"), dict) else False
     pending_count = int(status.get("pending_count", 0) or 0)
     restart_count = int(status.get("restart_count", 0) or 0)
+    auto_sweep = bool(status.get("auto_sweep"))
     heartbeat = _parse_iso(str(status.get("lock", {}).get("last_heartbeat_at", "")).strip()) if isinstance(status.get("lock"), dict) else None
     heartbeat_text = _format_timestamp(heartbeat.isoformat()) if heartbeat else "--:--:--"
     state = "healthy" if healthy else "paused" if paused else "down"
-    return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} | hb {heartbeat_text} | restarts {restart_count}", width)
+    sweep_text = " | sweep" if auto_sweep else ""
+    return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} | hb {heartbeat_text} | restarts {restart_count}{sweep_text}", width)
 
 
 def _bridge_command_args(args: argparse.Namespace, agent: str) -> list[str]:
@@ -1178,6 +1192,10 @@ def _supervisor_command_args(args: argparse.Namespace, agent: str, log_path: Pat
         command.append("--verbose")
     if args.claim_scope_prefix:
         command.extend(["--claim-scope-prefix", args.claim_scope_prefix])
+    if getattr(args, "auto_sweep", False):
+        command.append("--auto-sweep")
+    if getattr(args, "sweep_interval", 0.0):
+        command.extend(["--sweep-interval", str(args.sweep_interval)])
     return command
 
 
@@ -1199,6 +1217,11 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     failure_class = str(status.get("failure_class", "")).strip()
     if failure_class:
         print(f"  failure class: {failure_class}")
+    if status.get("auto_sweep"):
+        print(f"  auto sweep: every {float(status.get('sweep_interval', 0.0) or 0.0):.1f}s")
+        last_sweep_at = str(status.get("last_sweep_at", "")).strip()
+        if last_sweep_at:
+            print(f"  last sweep: {_format_timestamp(last_sweep_at)}")
     print()
 
 
@@ -1290,6 +1313,73 @@ def _stale_request_actions(record: dict[str, Any]) -> list[dict[str, Any]]:
             "message": f"Reroute stale request `{summary}` to {target}.",
         }
     ]
+
+
+def _request_has_followup(record: dict[str, Any], action_type: str) -> bool:
+    for followup in record.get("followups", []):
+        summary = str(followup.get("summary", "")).strip().lower()
+        if action_type == "remind" and summary.startswith("follow-up:"):
+            return True
+        if action_type == "reroute" and summary.startswith("rerouted:"):
+            return True
+    return False
+
+
+def _apply_request_timeout_actions(
+    inbox_path: Path,
+    records: list[dict[str, Any]],
+    *,
+    owner_agent: str | None,
+    dry_run: bool,
+) -> list[str]:
+    lines: list[str] = []
+    for record in records:
+        request = record["request"]
+        if owner_agent and str(request.get("from", "")).strip().lower() != owner_agent.lower():
+            continue
+        actions = _stale_request_actions(record)
+        if not actions:
+            continue
+        action = actions[0]
+        action_type = str(action.get("type", "")).strip()
+        if _request_has_followup(record, action_type):
+            continue
+        lines.append(_request_status_line(record, 120))
+        lines.append(f"  plan: {action.get('message', '')}")
+        if dry_run:
+            lines.append("")
+            continue
+        request_id = str(request.get("id", "")).strip()
+        if action_type == "remind":
+            _send_record(
+                inbox_path,
+                from_agent=str(request.get("from", "")).strip() or "system",
+                to_agent=str(action.get("to_agent", "")).strip(),
+                role="request",
+                task=str(request.get("task", "")).strip() or "follow-up",
+                summary=f"Follow-up: {request.get('summary', '')}",
+                details=f"Reminder on acknowledged request: {request.get('summary', '')}",
+                files=request.get("files", []),
+                request_id=request_id,
+                derived_from_request_id=request_id,
+            )
+            lines.append(f"  sent reminder to {action.get('to_agent', '')}")
+        elif action_type == "reroute":
+            _send_record(
+                inbox_path,
+                from_agent=str(request.get("from", "")).strip() or "system",
+                to_agent=str(action.get("to_agent", "")).strip(),
+                role="request",
+                task=str(request.get("task", "")).strip() or "rerouted request",
+                summary=f"Rerouted: {request.get('summary', '')}",
+                details=f"Original request to {request.get('to', '')} became stale and was rerouted.",
+                files=request.get("files", []),
+                request_id=request_id,
+                derived_from_request_id=request_id,
+            )
+            lines.append(f"  rerouted to {action.get('to_agent', '')}")
+        lines.append("")
+    return lines
 
 
 def _render_panel(title: str, rows: list[str], width: int, height: int | None = None) -> list[str]:
@@ -1855,58 +1945,20 @@ def cmd_requests(args: argparse.Namespace) -> None:
 
 def cmd_request_sweep(args: argparse.Namespace) -> None:
     records = _request_records(_read_messages(args.inbox_path))
-    stale_records = [record for record in records if str(record.get("state", "")) in {"stale", "acknowledged"}]
-    if args.agent:
-        needle = args.agent.lower()
-        stale_records = [
-            record for record in stale_records
-            if str(record["request"].get("from", "")).lower() == needle or str(record["request"].get("to", "")).lower() == needle
-        ]
-    stale_records = stale_records[-args.limit:]
+    stale_records = [record for record in records if str(record.get("state", "")) in {"stale", "acknowledged"}][-args.limit:]
     if not stale_records:
         print("no stale or acknowledged requests")
         return
-    for record in stale_records:
-        request = record["request"]
-        print(_request_status_line(record, 120))
-        actions = _stale_request_actions(record)
-        if not actions:
-            print("  no action")
-            print()
-            continue
-        action = actions[0]
-        print(f"  plan: {action.get('message', '')}")
-        if args.dry_run:
-            print()
-            continue
-        request_id = str(request.get("id", "")).strip()
-        if action["type"] == "remind":
-            _send_record(
-                args.inbox_path,
-                from_agent=str(request.get("from", "")).strip() or "system",
-                to_agent=str(action.get("to_agent", "")).strip(),
-                role="request",
-                task=str(request.get("task", "")).strip() or "follow-up",
-                summary=f"Follow-up: {request.get('summary', '')}",
-                details=f"Reminder on acknowledged request: {request.get('summary', '')}",
-                files=request.get("files", []),
-                request_id=request_id,
-            )
-            print(f"  sent reminder to {action.get('to_agent', '')}")
-        elif action["type"] == "reroute":
-            _send_record(
-                args.inbox_path,
-                from_agent=str(request.get("from", "")).strip() or "system",
-                to_agent=str(action.get("to_agent", "")).strip(),
-                role="request",
-                task=str(request.get("task", "")).strip() or "rerouted request",
-                summary=f"Rerouted: {request.get('summary', '')}",
-                details=f"Original request to {request.get('to', '')} became stale and was rerouted.",
-                files=request.get("files", []),
-                request_id=request_id,
-            )
-            print(f"  rerouted to {action.get('to_agent', '')}")
-        print()
+    lines = _apply_request_timeout_actions(
+        args.inbox_path,
+        stale_records,
+        owner_agent=args.agent,
+        dry_run=args.dry_run,
+    )
+    if not lines:
+        print("no actionable stale requests")
+        return
+    print("\n".join(lines))
 
 
 def _find_session(sessions: list[dict[str, Any]], *, agent: str, scope: str) -> dict[str, Any] | None:
@@ -2280,6 +2332,9 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
             "restart_count": 0,
             "backoff_seconds": 0.0,
             "failure_class": "",
+            "auto_sweep": bool(args.auto_sweep),
+            "sweep_interval": float(args.sweep_interval),
+            "last_sweep_at": "",
         },
     )
     print(f"started {args.agent} bridge")
@@ -2334,6 +2389,8 @@ def cmd_bridge_restart(args: argparse.Namespace) -> None:
         claim_on_files=args.claim_on_files,
         claim_scope_prefix=args.claim_scope_prefix,
         verbose=args.verbose,
+        auto_sweep=args.auto_sweep,
+        sweep_interval=args.sweep_interval,
     )
     cmd_bridge_start(start_args)
 
@@ -2397,10 +2454,38 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "restart_count": restart_count,
                 "backoff_seconds": 0.0,
                 "failure_class": "",
+                "auto_sweep": bool(args.auto_sweep),
+                "sweep_interval": float(args.sweep_interval),
+                "last_sweep_at": str(existing.get("last_sweep_at", "")).strip(),
             },
         )
+        last_sweep_monotonic = time.monotonic()
+        while True:
+            return_code = process.poll()
+            if return_code is not None:
+                break
+            if args.auto_sweep and args.sweep_interval > 0 and (time.monotonic() - last_sweep_monotonic) >= args.sweep_interval:
+                records = _request_records(_read_messages(args.inbox_path))
+                _apply_request_timeout_actions(
+                    args.inbox_path,
+                    records,
+                    owner_agent=args.agent,
+                    dry_run=False,
+                )
+                current = _read_bridge_lock(lock_path)
+                current.update(
+                    {
+                        "agent": args.agent,
+                        "supervisor_pid": os.getpid(),
+                        "auto_sweep": True,
+                        "sweep_interval": float(args.sweep_interval),
+                        "last_sweep_at": _now_iso(),
+                    }
+                )
+                _write_bridge_lock(lock_path, current)
+                last_sweep_monotonic = time.monotonic()
+            time.sleep(min(1.0, max(0.2, args.interval)))
 
-        return_code = process.wait()
         state = _read_automation_state(_automation_state_path(args.home, args.agent))
         last_error = str(state.get("last_error", "")).strip()
         failure_class = _classify_error(last_error)
@@ -2608,6 +2693,8 @@ def build_parser() -> argparse.ArgumentParser:
     supervise_parser.add_argument("--verbose", action="store_true")
     supervise_parser.add_argument("--log-path", default="")
     supervise_parser.add_argument("--always-restart", action="store_true")
+    supervise_parser.add_argument("--auto-sweep", action="store_true", help="periodically recover stale requests owned by this agent")
+    supervise_parser.add_argument("--sweep-interval", type=float, default=30.0, help="seconds between automatic stale-request sweeps")
     supervise_parser.set_defaults(func=cmd_supervise)
 
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
@@ -2625,6 +2712,8 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_start_parser.add_argument("--claim-on-files", action="store_true")
     bridge_start_parser.add_argument("--claim-scope-prefix", default="auto-")
     bridge_start_parser.add_argument("--verbose", action="store_true")
+    bridge_start_parser.add_argument("--auto-sweep", action="store_true", help="periodically recover stale requests owned by this agent")
+    bridge_start_parser.add_argument("--sweep-interval", type=float, default=30.0, help="seconds between automatic stale-request sweeps")
     bridge_start_parser.set_defaults(func=cmd_bridge_start)
 
     bridge_stop_parser = subparsers.add_parser("bridge-stop", help="stop a supervised background bridge for an agent")
@@ -2641,6 +2730,8 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_restart_parser.add_argument("--claim-scope-prefix", default="auto-")
     bridge_restart_parser.add_argument("--verbose", action="store_true")
     bridge_restart_parser.add_argument("--timeout", type=float, default=3.0)
+    bridge_restart_parser.add_argument("--auto-sweep", action="store_true", help="periodically recover stale requests owned by this agent")
+    bridge_restart_parser.add_argument("--sweep-interval", type=float, default=30.0, help="seconds between automatic stale-request sweeps")
     bridge_restart_parser.set_defaults(func=cmd_bridge_restart)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")

@@ -99,8 +99,8 @@ agentcodehandoff auto-status
 Start supervised background bridges:
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo
-agentcodehandoff bridge-start --agent hermes --repo /path/to/repo
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
 ```
 
 Inspect supervised bridge health:
@@ -236,6 +236,12 @@ Sweep stale requests and apply timeout actions:
 
 ```bash
 agentcodehandoff request-sweep
+```
+
+Let supervised bridges recover their own stale requests automatically:
+
+```bash
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep --sweep-interval 30
 ```
 
 Apply a safe remediation automatically:
