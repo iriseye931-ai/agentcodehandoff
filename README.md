@@ -259,6 +259,8 @@ Recover paused or down bridges with one command:
 agentcodehandoff bridge-recover
 ```
 
+Bridge recovery uses the last saved per-agent profile even after a full stop removes the live lock.
+
 Apply a safe remediation automatically:
 
 ```bash

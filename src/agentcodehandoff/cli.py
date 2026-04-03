@@ -130,6 +130,10 @@ def _bridge_lock_path(home: Path, agent: str) -> Path:
     return home / "bridges" / f"{agent}.json"
 
 
+def _bridge_profile_path(home: Path, agent: str) -> Path:
+    return home / "bridges" / f"{agent}.profile.json"
+
+
 def _read_bridge_lock(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -143,6 +147,40 @@ def _read_bridge_lock(path: Path) -> dict[str, Any]:
 def _write_bridge_lock(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_bridge_profile(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_bridge_profile(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _save_bridge_profile(home: Path, payload: dict[str, Any]) -> None:
+    agent = str(payload.get("agent", "")).strip()
+    if not agent:
+        return
+    profile = {
+        "agent": agent,
+        "repo": str(payload.get("repo", "")).strip(),
+        "interval": float(payload.get("interval", 2.0) or 2.0),
+        "claim_on_files": bool(payload.get("claim_on_files", False)),
+        "claim_scope_prefix": str(payload.get("claim_scope_prefix", "auto-") or "auto-"),
+        "auto_sweep": bool(payload.get("auto_sweep", False)),
+        "sweep_interval": float(payload.get("sweep_interval", 30.0) or 30.0),
+        "max_restarts": int(payload.get("max_restarts", 5) or 5),
+        "cool_off_seconds": float(payload.get("cool_off_seconds", BRIDGE_COOL_OFF_SECONDS) or BRIDGE_COOL_OFF_SECONDS),
+        "updated_at": _now_iso(),
+    }
+    _write_bridge_profile(_bridge_profile_path(home, agent), profile)
 
 
 def _append_bridge_event(path: Path, event_type: str, summary: str, *, detail: str = "") -> None:
@@ -1153,6 +1191,7 @@ def _bridge_status_line(agent: str, state: dict[str, Any], width: int) -> str:
 
 def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[str, Any]:
     lock = _read_bridge_lock(_bridge_lock_path(home, agent))
+    profile = _read_bridge_profile(_bridge_profile_path(home, agent))
     pid = int(lock.get("pid", 0) or 0)
     supervisor_pid = int(lock.get("supervisor_pid", 0) or 0)
     alive = _pid_alive(pid)
@@ -1189,6 +1228,7 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "last_exit_at": str(lock.get("last_exit_at", "")).strip(),
         "last_exit_code": lock.get("last_exit_code", ""),
         "recent_events": lock.get("recent_events", []),
+        "profile": profile,
     }
 
 
@@ -1284,9 +1324,12 @@ def _supervisor_command_args(args: argparse.Namespace, agent: str, log_path: Pat
 def _print_bridge_supervision(status: dict[str, Any]) -> None:
     print(_bridge_supervision_line(status, 120))
     lock = status.get("lock", {}) if isinstance(status.get("lock"), dict) else {}
+    profile = status.get("profile", {}) if isinstance(status.get("profile"), dict) else {}
     repo = str(lock.get("repo", "")).strip()
     if repo:
         print(f"  repo: {repo}")
+    elif profile.get("repo"):
+        print(f"  repo profile: {profile.get('repo', '')}")
     log_path = str(lock.get("log_path", "")).strip()
     if log_path:
         print(f"  log: {log_path}")
@@ -1329,6 +1372,9 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
             print(line)
             if detail:
                 print(f"      {detail}")
+    profile_updated_at = str(profile.get("updated_at", "")).strip()
+    if profile_updated_at:
+        print(f"  saved profile: {_format_timestamp(profile_updated_at)}")
     print()
 
 
@@ -2665,6 +2711,20 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
             "recent_events": history[-BRIDGE_EVENT_HISTORY:],
         },
     )
+    _save_bridge_profile(
+        args.home,
+        {
+            "agent": args.agent,
+            "repo": str(args.repo),
+            "interval": args.interval,
+            "claim_on_files": bool(args.claim_on_files),
+            "claim_scope_prefix": args.claim_scope_prefix,
+            "auto_sweep": bool(args.auto_sweep),
+            "sweep_interval": float(args.sweep_interval),
+            "max_restarts": int(args.max_restarts),
+            "cool_off_seconds": float(args.cool_off_seconds),
+        },
+    )
     print(f"started {args.agent} bridge")
     print(f"supervisor pid: {process.pid}")
     print(f"log: {log_path}")
@@ -2743,7 +2803,13 @@ def cmd_bridge_recover(args: argparse.Namespace) -> None:
             print(f"{agent}: no recovery needed")
             continue
         lock = status.get("lock", {}) if isinstance(status.get("lock"), dict) else {}
-        repo = Path(str(lock.get("repo", "")).strip() or str(args.repo))
+        profile = status.get("profile", {}) if isinstance(status.get("profile"), dict) else {}
+        repo_value = (
+            str(lock.get("repo", "")).strip()
+            or str(profile.get("repo", "")).strip()
+            or str(args.repo)
+        )
+        repo = Path(repo_value)
         common_args = argparse.Namespace(
             home=args.home,
             inbox_path=args.inbox_path,
@@ -2751,15 +2817,15 @@ def cmd_bridge_recover(args: argparse.Namespace) -> None:
             sessions_path=args.sessions_path,
             agent=agent,
             repo=repo,
-            interval=float(lock.get("interval", args.interval) or args.interval),
-            claim_on_files=bool(lock.get("claim_on_files", args.claim_on_files)),
-            claim_scope_prefix=str(lock.get("claim_scope_prefix", args.claim_scope_prefix) or args.claim_scope_prefix),
+            interval=float(lock.get("interval", profile.get("interval", args.interval)) or profile.get("interval", args.interval) or args.interval),
+            claim_on_files=bool(lock.get("claim_on_files", profile.get("claim_on_files", args.claim_on_files))),
+            claim_scope_prefix=str(lock.get("claim_scope_prefix", profile.get("claim_scope_prefix", args.claim_scope_prefix)) or profile.get("claim_scope_prefix", args.claim_scope_prefix) or args.claim_scope_prefix),
             verbose=args.verbose,
             timeout=args.timeout,
-            auto_sweep=bool(lock.get("auto_sweep", args.auto_sweep)),
-            sweep_interval=float(lock.get("sweep_interval", args.sweep_interval) or args.sweep_interval),
-            max_restarts=int(lock.get("max_restarts", args.max_restarts) or args.max_restarts),
-            cool_off_seconds=float(lock.get("cool_off_seconds", args.cool_off_seconds) or args.cool_off_seconds),
+            auto_sweep=bool(lock.get("auto_sweep", profile.get("auto_sweep", args.auto_sweep))),
+            sweep_interval=float(lock.get("sweep_interval", profile.get("sweep_interval", args.sweep_interval)) or profile.get("sweep_interval", args.sweep_interval) or args.sweep_interval),
+            max_restarts=int(lock.get("max_restarts", profile.get("max_restarts", args.max_restarts)) or profile.get("max_restarts", args.max_restarts) or args.max_restarts),
+            cool_off_seconds=float(lock.get("cool_off_seconds", profile.get("cool_off_seconds", args.cool_off_seconds)) or profile.get("cool_off_seconds", args.cool_off_seconds) or args.cool_off_seconds),
         )
         if lock and (int(lock.get("supervisor_pid", 0) or 0) or int(lock.get("pid", 0) or 0)):
             common_args.timeout = args.timeout
