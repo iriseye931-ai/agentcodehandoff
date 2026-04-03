@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
+import select
 import signal
 import shutil
 import subprocess
 import sys
 import time
 import textwrap
+import termios
+import tty
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1960,6 +1965,7 @@ def _render_ops_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessi
     recent_rows = [_message_summary_line(message, total_width - 4) for message in urgent_messages] or ["No urgent workflow events"]
     lines.extend(_render_panel("Urgent Workflow", recent_rows, total_width, height=10))
     lines.append("")
+    lines.append("Keys: [a] apply top ops action  [r] recover bridges  [s] sweep requests  [q] quit")
     lines.append("Ctrl-C to exit")
     return "\n".join(lines)
 
@@ -2256,6 +2262,7 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     recent_rows = recent_rows or ["No messages yet"]
     lines.extend(_render_panel("Recent Messages", recent_rows, total_width, height=min(14, max(8, size.lines - 28))))
     lines.append("")
+    lines.append("Keys: [q] quit  [a] top ops action  [r] recover bridges  [s] sweep requests")
     lines.append("Ctrl-C to exit")
     return "\n".join(lines)
 
@@ -3773,18 +3780,113 @@ def cmd_supervise(args: argparse.Namespace) -> None:
 
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
-    while True:
-        output = (
+    last_notice = ""
+
+    def render() -> str:
+        body = (
             _render_ops_dashboard(args.home, args.inbox_path, args.claims_path, args.sessions_path)
             if args.view == "ops"
             else _render_dashboard(args.home, args.inbox_path, args.claims_path, args.sessions_path)
         )
-        sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.write(output + "\n")
-        sys.stdout.flush()
-        if args.once:
-            return
-        time.sleep(args.interval)
+        if last_notice:
+            return body + "\n" + _truncate(f"Last action: {last_notice}", _terminal_size().columns)
+        return body
+
+    def run_action(key: str) -> str:
+        if key == "r":
+            action_args = argparse.Namespace(
+                home=args.home,
+                inbox_path=args.inbox_path,
+                claims_path=args.claims_path,
+                sessions_path=args.sessions_path,
+                agents=_default_agents(),
+                repo=Path.cwd(),
+                interval=2.0,
+                claim_on_files=False,
+                claim_scope_prefix="auto-",
+                verbose=False,
+                timeout=3.0,
+                auto_sweep=False,
+                sweep_interval=30.0,
+                max_restarts=5,
+                cool_off_seconds=BRIDGE_COOL_OFF_SECONDS,
+                force=False,
+                fail_if_idle=False,
+            )
+            with io.StringIO() as buffer, contextlib.redirect_stdout(buffer):
+                cmd_bridge_recover(action_args)
+                return buffer.getvalue().strip() or "bridge recovery completed"
+        if key == "s":
+            action_args = argparse.Namespace(
+                inbox_path=args.inbox_path,
+                agent=None,
+                limit=20,
+                dry_run=False,
+            )
+            with io.StringIO() as buffer, contextlib.redirect_stdout(buffer):
+                cmd_request_sweep(action_args)
+                return buffer.getvalue().strip() or "request sweep completed"
+        if key == "a":
+            action_args = argparse.Namespace(
+                home=args.home,
+                inbox_path=args.inbox_path,
+                claims_path=args.claims_path,
+                sessions_path=args.sessions_path,
+                apply=True,
+                resolve_action="close",
+                repo=Path.cwd(),
+                interval=2.0,
+                claim_on_files=False,
+                claim_scope_prefix="auto-",
+                verbose=False,
+                timeout=3.0,
+                auto_sweep=False,
+                sweep_interval=30.0,
+                max_restarts=5,
+                cool_off_seconds=BRIDGE_COOL_OFF_SECONDS,
+                force=False,
+                limit=20,
+                create_session=True,
+            )
+            with io.StringIO() as buffer, contextlib.redirect_stdout(buffer):
+                cmd_ops_next(action_args)
+                return buffer.getvalue().strip() or "ops-next applied"
+        return ""
+
+    if not args.interactive or args.once or not sys.stdin.isatty():
+        while True:
+            output = render()
+            sys.stdout.write("\x1b[2J\x1b[H")
+            sys.stdout.write(output + "\n")
+            sys.stdout.flush()
+            if args.once:
+                return
+            time.sleep(args.interval)
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        while True:
+            output = render()
+            sys.stdout.write("\x1b[2J\x1b[H")
+            sys.stdout.write(output + "\n")
+            sys.stdout.flush()
+            ready, _, _ = select.select([sys.stdin], [], [], args.interval)
+            if not ready:
+                continue
+            key = sys.stdin.read(1)
+            if key == "q":
+                return
+            if key in {"a", "r", "s"}:
+                try:
+                    last_notice = run_action(key)
+                except SystemExit as exc:
+                    last_notice = str(exc) or f"action {key} failed"
+                except Exception as exc:
+                    last_notice = f"action {key} failed: {exc}"
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -4102,6 +4204,7 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_parser.add_argument("--interval", type=float, default=2.0)
     dashboard_parser.add_argument("--once", action="store_true")
     dashboard_parser.add_argument("--view", choices=["full", "ops"], default="full")
+    dashboard_parser.add_argument("--interactive", action="store_true", help="enable keyboard actions in the terminal dashboard")
     dashboard_parser.set_defaults(func=cmd_dashboard)
 
     read_parser = subparsers.add_parser("read", help="read recent agent messages")

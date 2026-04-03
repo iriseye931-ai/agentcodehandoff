@@ -144,6 +144,18 @@ agentcodehandoff down --template local-trio --repo /path/to/repo
 agentcodehandoff restart-team --template local-trio --repo /path/to/repo
 ```
 
+For live terminal operations, enable dashboard actions:
+
+```bash
+agentcodehandoff dashboard --view ops --interactive
+```
+
+Keys:
+- `a` apply the top safe ops action
+- `r` recover bridges
+- `s` sweep stale requests
+- `q` quit
+
 Inspect supervised bridge health:
 
 ```bash
