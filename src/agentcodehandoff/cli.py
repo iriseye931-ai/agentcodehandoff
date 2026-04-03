@@ -183,6 +183,10 @@ def _classify_error(text: str) -> str:
     return "runtime"
 
 
+def _is_hard_failure(failure_class: str) -> bool:
+    return failure_class in {"auth", "missing-dependency", "repo"}
+
+
 def _parse_iso(value: str) -> datetime | None:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -924,10 +928,12 @@ def _bridge_status_line(agent: str, state: dict[str, Any], width: int) -> str:
 def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[str, Any]:
     lock = _read_bridge_lock(_bridge_lock_path(home, agent))
     pid = int(lock.get("pid", 0) or 0)
+    supervisor_pid = int(lock.get("supervisor_pid", 0) or 0)
     alive = _pid_alive(pid)
+    supervisor_alive = _pid_alive(supervisor_pid)
     heartbeat = _parse_iso(str(lock.get("last_heartbeat_at", "")).strip())
     now = datetime.now(timezone.utc)
-    healthy = alive and heartbeat is not None and (now - heartbeat).total_seconds() <= BRIDGE_HEARTBEAT_SECONDS
+    healthy = supervisor_alive and alive and heartbeat is not None and (now - heartbeat).total_seconds() <= BRIDGE_HEARTBEAT_SECONDS
     automation_state = _read_automation_state(_automation_state_path(home, agent))
     seen_ids = {str(item) for item in automation_state.get("seen_ids", []) if str(item).strip()}
     pending = _pending_messages_for_agent(_read_messages(inbox_path), agent, seen_ids)
@@ -941,6 +947,7 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "agent": agent,
         "pid": pid,
         "alive": alive,
+        "supervisor_alive": supervisor_alive,
         "healthy": healthy,
         "lock": lock,
         "pending_count": len(pending),
@@ -956,11 +963,12 @@ def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     pid = int(status.get("pid", 0) or 0)
     supervisor_pid = int(status.get("lock", {}).get("supervisor_pid", 0) or 0) if isinstance(status.get("lock"), dict) else 0
     healthy = bool(status.get("healthy"))
+    paused = bool(status.get("lock", {}).get("paused", False)) if isinstance(status.get("lock"), dict) else False
     pending_count = int(status.get("pending_count", 0) or 0)
     restart_count = int(status.get("restart_count", 0) or 0)
     heartbeat = _parse_iso(str(status.get("lock", {}).get("last_heartbeat_at", "")).strip()) if isinstance(status.get("lock"), dict) else None
     heartbeat_text = _format_timestamp(heartbeat.isoformat()) if heartbeat else "--:--:--"
-    state = "healthy" if healthy else "down"
+    state = "healthy" if healthy else "paused" if paused else "down"
     return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} | hb {heartbeat_text} | restarts {restart_count}", width)
 
 
@@ -1681,13 +1689,17 @@ def cmd_auto(args: argparse.Namespace) -> None:
         payload = {
             "agent": args.agent,
             "pid": os.getpid(),
+            "supervisor_pid": int(existing.get("supervisor_pid", 0) or 0),
             "repo": str(args.repo),
-            "started_at": _now_iso(),
+            "started_at": existing.get("started_at") or _now_iso(),
             "last_heartbeat_at": _now_iso(),
             "interval": args.interval,
             "claim_on_files": bool(args.claim_on_files),
             "log_path": args.log_path,
             "mode": "supervised",
+            "restart_count": int(existing.get("restart_count", 0) or 0),
+            "backoff_seconds": float(existing.get("backoff_seconds", 0.0) or 0.0),
+            "failure_class": str(existing.get("failure_class", "")).strip(),
         }
         _write_bridge_lock(lock_path, payload)
 
@@ -1700,6 +1712,7 @@ def cmd_auto(args: argparse.Namespace) -> None:
                     {
                         "agent": args.agent,
                         "pid": os.getpid(),
+                        "supervisor_pid": int(lock.get("supervisor_pid", 0) or 0),
                         "repo": str(args.repo),
                         "last_heartbeat_at": _now_iso(),
                         "interval": args.interval,
@@ -1775,7 +1788,8 @@ def cmd_auto(args: argparse.Namespace) -> None:
         if args.supervised:
             current = _read_bridge_lock(lock_path)
             current_pid = int(current.get("pid", 0) or 0)
-            if current_pid == os.getpid():
+            supervisor_pid = int(current.get("supervisor_pid", 0) or 0)
+            if current_pid == os.getpid() and not supervisor_pid:
                 _remove_bridge_lock(lock_path)
 
 
@@ -1809,7 +1823,7 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
     command = _supervisor_command_args(args, args.agent, log_path)
     process = subprocess.Popen(
         command,
-        cwd=args.repo,
+        cwd=args.home,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         start_new_session=True,
@@ -1903,15 +1917,35 @@ def cmd_supervise(args: argparse.Namespace) -> None:
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / f"{args.agent}-bridge.log"
         command = _bridge_command_args(args, args.agent)
-        with log_path.open("a", encoding="utf-8") as log_handle:
-            process = subprocess.Popen(
-                command,
-                cwd=args.repo,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                text=True,
+        try:
+            with log_path.open("a", encoding="utf-8") as log_handle:
+                process = subprocess.Popen(
+                    command,
+                    cwd=args.repo,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    text=True,
+                )
+        except Exception as exc:
+            restart_count += 1
+            failure_class = _classify_error(str(exc)) or "repo"
+            current = _read_bridge_lock(lock_path)
+            current.update(
+                {
+                    "pid": 0,
+                    "supervisor_pid": os.getpid(),
+                    "last_exit_code": -1,
+                    "last_exit_at": _now_iso(),
+                    "failure_class": failure_class,
+                    "restart_count": restart_count,
+                    "backoff_seconds": 0.0,
+                    "last_error": str(exc)[:500],
+                    "paused": True,
+                }
             )
+            _write_bridge_lock(lock_path, current)
+            return
 
         _write_bridge_lock(
             lock_path,
@@ -1946,6 +1980,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                     "last_exit_at": _now_iso(),
                     "failure_class": "",
                     "backoff_seconds": 0.0,
+                    "paused": False,
                 }
             )
             _write_bridge_lock(lock_path, current)
@@ -1953,6 +1988,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
 
         restart_count += 1
         backoff = min(BRIDGE_RESTART_MAX_DELAY, BRIDGE_RESTART_BASE_DELAY * (2 ** max(0, restart_count - 1)))
+        hard_failure = _is_hard_failure(failure_class)
         current = _read_bridge_lock(lock_path)
         current.update(
             {
@@ -1964,9 +2000,14 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "restart_count": restart_count,
                 "backoff_seconds": backoff,
                 "last_error": last_error,
+                "paused": hard_failure,
             }
         )
         _write_bridge_lock(lock_path, current)
+        if hard_failure and not args.always_restart:
+            if args.verbose:
+                print(f"{args.agent} bridge entered paused state due to hard failure: {failure_class}", file=sys.stderr)
+            return
         if args.verbose:
             print(f"{args.agent} bridge exited with {return_code}; restarting in {backoff:.1f}s", file=sys.stderr)
         time.sleep(backoff)

@@ -387,6 +387,7 @@ What supervision adds:
 - pending request visibility
 - log file paths for bridge output
 - restart counts and failure classification
+- paused state on hard failures like bad repo/auth/config problems
 - lifecycle commands to start, stop, restart, and inspect bridges
 
 Core commands:
