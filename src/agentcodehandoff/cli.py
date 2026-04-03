@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ DEFAULT_CLAIMS_PATH = DEFAULT_HOME / "claims.json"
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
 AUTOMATION_STALE_SECONDS = 30
+DASHBOARD_RECENT_MESSAGES = 8
 
 
 def _now_iso() -> str:
@@ -162,6 +164,74 @@ def _pending_messages_for_agent(messages: list[dict[str, Any]], agent: str, seen
             continue
         pending.append(message)
     return pending
+
+
+def _routing_score(agent: str, text: str, files: list[str]) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+    lowered = text.lower()
+    file_text = " ".join(files).lower()
+    if agent == "hermes":
+        rules = {
+            "readme": 4,
+            "docs": 4,
+            "documentation": 4,
+            "copy": 3,
+            "wording": 3,
+            "ux": 3,
+            "review": 2,
+            "summary": 2,
+            "explain": 2,
+            "install": 3,
+            "guide": 3,
+        }
+        for key, weight in rules.items():
+            if key in lowered:
+                score += weight
+                reasons.append(key)
+        if ".md" in file_text or "readme" in file_text:
+            score += 4
+            reasons.append("markdown-files")
+    else:
+        rules = {
+            "bug": 4,
+            "fix": 4,
+            "test": 4,
+            "refactor": 4,
+            "cli": 3,
+            "build": 3,
+            "compile": 3,
+            "implementation": 3,
+            "code": 2,
+            "patch": 3,
+            "error": 3,
+            "stack trace": 4,
+        }
+        for key, weight in rules.items():
+            if key in lowered:
+                score += weight
+                reasons.append(key)
+        if any(token in file_text for token in [".py", ".ts", ".tsx", ".js", ".rs", ".go", ".sh"]):
+            score += 3
+            reasons.append("code-files")
+    return score, reasons
+
+
+def _recommend_agent(summary: str, details: str, files: list[str]) -> tuple[str, dict[str, Any]]:
+    combined = " ".join(part for part in [summary, details] if part).strip()
+    hermes_score, hermes_reasons = _routing_score("hermes", combined, files)
+    codex_score, codex_reasons = _routing_score("codex", combined, files)
+    if codex_score > hermes_score:
+        return "codex", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
+    if hermes_score > codex_score:
+        return "hermes", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
+    if any(item.lower().endswith(".md") for item in files):
+        hermes_score += 1
+        hermes_reasons.append("markdown-tiebreak")
+        return "hermes", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
+    codex_score += 1
+    codex_reasons.append("code-default")
+    return "codex", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
 
 
 def _agent_prompt(agent: str, repo: Path, message: dict[str, Any]) -> str:
@@ -414,6 +484,60 @@ def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
     print()
 
 
+def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
+    messages = _read_messages(inbox_path)
+    claims = _read_claims(claims_path)
+    latest_by_agent: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        sender = str(message.get("from", "")).strip()
+        if sender:
+            latest_by_agent[sender] = message
+
+    lines: list[str] = []
+    lines.append("AgentCodeHandoff Dashboard")
+    lines.append("=" * 80)
+    lines.append("")
+    lines.append("Latest handoffs")
+    for agent in ("codex", "hermes"):
+        message = latest_by_agent.get(agent)
+        if message:
+            lines.append(f"- {agent}: {message.get('summary', '')}")
+        else:
+            lines.append(f"- {agent}: waiting")
+    lines.append("")
+    lines.append("Auto bridges")
+    for agent in ("codex", "hermes"):
+        state = _read_automation_state(_automation_state_path(home, agent))
+        last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
+        now = datetime.now(timezone.utc)
+        alive = last_poll is not None and (now - last_poll).total_seconds() <= AUTOMATION_STALE_SECONDS
+        lines.append(f"- {agent}: {'alive' if alive else 'stale'}")
+    lines.append("")
+    lines.append("Open claims")
+    open_claims = _open_claims(claims)
+    if open_claims:
+        for claim in open_claims:
+            files = ", ".join(str(item) for item in (claim.get("files") or []))
+            lines.append(f"- {claim.get('agent', '?')} :: {claim.get('scope', '')} :: {files or 'no files'}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Recent messages")
+    for message in messages[-DASHBOARD_RECENT_MESSAGES:]:
+        header = f"[{_format_timestamp(str(message.get('timestamp', '')))}] {message.get('from', '?')} -> {message.get('to', '?')} :: {message.get('role', '')}"
+        lines.append(header)
+        summary = str(message.get("summary", "")).strip()
+        if summary:
+            lines.append(f"  {summary}")
+        details = str(message.get("details", "")).strip()
+        if details:
+            for wrapped in textwrap.wrap(details, width=74):
+                lines.append(f"  {wrapped}")
+    lines.append("")
+    lines.append("Press Ctrl-C to exit.")
+    return "\n".join(lines)
+
+
 def cmd_read(args: argparse.Namespace) -> None:
     messages = _filter_messages(_read_messages(args.inbox_path), args.agent, args.limit)
     for message in messages:
@@ -455,6 +579,50 @@ def cmd_request(args: argparse.Namespace) -> None:
             "files": _split_files(args.files or ""),
         },
     )
+    _print_message(record)
+
+
+def cmd_route(args: argparse.Namespace) -> None:
+    files = _split_files(args.files or "")
+    agent, meta = _recommend_agent(args.summary, args.details, files)
+    print(f"recommended_agent: {agent}")
+    print(f"codex_score: {meta['scores']['codex']}")
+    print(f"hermes_score: {meta['scores']['hermes']}")
+    if meta["reasons"][agent]:
+        print("reasons:", ", ".join(meta["reasons"][agent]))
+
+
+def cmd_dispatch(args: argparse.Namespace) -> None:
+    files = _split_files(args.files or "")
+    chosen = args.to_agent
+    meta: dict[str, Any] | None = None
+    rerouted = False
+    if args.route == "smart":
+        chosen, meta = _recommend_agent(args.summary, args.details, files)
+    if chosen == args.from_agent and not args.allow_self_route:
+        chosen = "hermes" if args.from_agent == "codex" else "codex"
+        rerouted = True
+    record = _write_message(
+        args.inbox_path,
+        {
+            "from": args.from_agent,
+            "to": chosen,
+            "role": args.role,
+            "task": args.task,
+            "summary": args.summary,
+            "details": args.details,
+            "files": files,
+        },
+    )
+    if meta is not None:
+        print(f"routed_to: {chosen}")
+        print(f"codex_score: {meta['scores']['codex']}")
+        print(f"hermes_score: {meta['scores']['hermes']}")
+        if meta["reasons"][chosen]:
+            print("reasons:", ", ".join(meta["reasons"][chosen]))
+        if rerouted:
+            print("reroute_note: avoided sending the request back to the originating agent")
+        print()
     _print_message(record)
 
 
@@ -640,6 +808,17 @@ def cmd_auto_status(args: argparse.Namespace) -> None:
         _print_bridge_state(agent, state)
 
 
+def cmd_dashboard(args: argparse.Namespace) -> None:
+    while True:
+        output = _render_dashboard(args.home, args.inbox_path, args.claims_path)
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.write(output + "\n")
+        sys.stdout.flush()
+        if args.once:
+            return
+        time.sleep(args.interval)
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     _ensure_state(args.home, args.inbox_path, args.claims_path)
     created_messages: list[str] = []
@@ -775,6 +954,11 @@ def build_parser() -> argparse.ArgumentParser:
     auto_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     auto_status_parser.set_defaults(func=cmd_auto_status)
 
+    dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")
+    dashboard_parser.add_argument("--interval", type=float, default=2.0)
+    dashboard_parser.add_argument("--once", action="store_true")
+    dashboard_parser.set_defaults(func=cmd_dashboard)
+
     read_parser = subparsers.add_parser("read", help="read recent agent messages")
     read_parser.add_argument("--agent", help="filter messages by agent name")
     read_parser.add_argument("--limit", type=int, default=20)
@@ -814,6 +998,24 @@ def build_parser() -> argparse.ArgumentParser:
     request_parser.add_argument("--role", default="request")
     request_parser.add_argument("--files", default="", help="comma-separated file list")
     request_parser.set_defaults(func=cmd_request)
+
+    route_parser = subparsers.add_parser("route", help="recommend Codex or Hermes for a request")
+    route_parser.add_argument("--summary", required=True)
+    route_parser.add_argument("--details", default="")
+    route_parser.add_argument("--files", default="", help="comma-separated file list")
+    route_parser.set_defaults(func=cmd_route)
+
+    dispatch_parser = subparsers.add_parser("dispatch", help="send a request using smart or explicit routing")
+    dispatch_parser.add_argument("--from-agent", required=True)
+    dispatch_parser.add_argument("--summary", required=True)
+    dispatch_parser.add_argument("--details", default="")
+    dispatch_parser.add_argument("--task", default="shared task")
+    dispatch_parser.add_argument("--files", default="", help="comma-separated file list")
+    dispatch_parser.add_argument("--route", choices=["smart", "explicit"], default="smart")
+    dispatch_parser.add_argument("--to-agent", choices=["codex", "hermes"], default="hermes")
+    dispatch_parser.add_argument("--allow-self-route", action="store_true", help="allow smart routing to target the originating agent")
+    dispatch_parser.add_argument("--role", default="request")
+    dispatch_parser.set_defaults(func=cmd_dispatch)
 
     claim_parser = subparsers.add_parser("claim", help="claim ownership of a scope or file set")
     claim_parser.add_argument("--agent", required=True)

@@ -89,6 +89,12 @@ Check whether the bridges appear alive:
 agentcodehandoff auto-status
 ```
 
+Open the live terminal dashboard:
+
+```bash
+agentcodehandoff dashboard
+```
+
 Send a handoff:
 
 ```bash
@@ -105,6 +111,16 @@ agentcodehandoff-codex-request \
   --summary "Need a quick review" \
   --details "Reply automatically with short feedback." \
   --files "README.md"
+```
+
+Route a request automatically:
+
+```bash
+agentcodehandoff dispatch \
+  --from-agent codex \
+  --summary "Fix failing CLI test" \
+  --details "Investigate the parser behavior and send it to the best agent automatically." \
+  --files "src/agentcodehandoff/cli.py,README.md"
 ```
 
 Claim a scope:
@@ -126,6 +142,7 @@ agentcodehandoff watch --agent hermes
 agentcodehandoff latest --agent hermes
 agentcodehandoff status
 agentcodehandoff auto-status
+agentcodehandoff dashboard
 agentcodehandoff claims
 ```
 
@@ -196,6 +213,30 @@ Notes:
 - the auto bridge only replies to messages addressed to that agent
 - auto bridges only respond to `request`, `task`, and `auto-request` roles
 - plain `handoff` messages are informational and do not auto-trigger replies
+
+## Smart Routing
+
+`agentcodehandoff route` scores a request for Codex vs Hermes:
+
+- Hermes is preferred for docs, copy, README, install, review, and UX-oriented work
+- Codex is preferred for bugs, tests, refactors, CLI/code changes, and build/debug work
+
+Examples:
+
+```bash
+agentcodehandoff route \
+  --summary "Improve README onboarding" \
+  --details "Tighten install wording and first-run instructions." \
+  --files "README.md,install.sh"
+```
+
+```bash
+agentcodehandoff dispatch \
+  --from-agent codex \
+  --summary "Fix parser bug" \
+  --details "Investigate failing CLI state handling and route to the best agent." \
+  --files "src/agentcodehandoff/cli.py"
+```
 
 ## Configuration
 
