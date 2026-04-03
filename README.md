@@ -69,8 +69,9 @@ For the full supervised collaboration path, start with:
 1. `agentcodehandoff doctor`
 2. `agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep`
 3. `agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep`
-4. `agentcodehandoff dashboard --view ops`
-5. `agentcodehandoff bridge-status`
+4. `agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep`
+5. `agentcodehandoff dashboard --view ops`
+6. `agentcodehandoff bridge-status`
 
 If you are the second collaborator terminal, keep this shorter loop:
 
@@ -91,6 +92,7 @@ For a read-only observer setup, start two terminals:
 ```bash
 agentcodehandoff-codex-watch
 agentcodehandoff-hermes-watch
+agentcodehandoff-claude-watch
 ```
 
 For manually managed auto-reply bridges, start them in real terminals:
@@ -98,6 +100,7 @@ For manually managed auto-reply bridges, start them in real terminals:
 ```bash
 agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
+agentcodehandoff-claude-auto --repo /Users/iris/Projects/agent-inbox
 ```
 
 Enable automatic file claims from bridge replies:
@@ -117,6 +120,7 @@ For day-to-day supervised operation, prefer managed background bridges instead o
 ```bash
 agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
 ```
 
 Inspect supervised bridge health:
@@ -469,24 +473,34 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-bridge-status`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
+- `agentcodehandoff-claude-watch`
 - `agentcodehandoff-codex-read`
 - `agentcodehandoff-hermes-read`
+- `agentcodehandoff-claude-read`
 - `agentcodehandoff-codex-auto`
 - `agentcodehandoff-hermes-auto`
+- `agentcodehandoff-claude-auto`
 - `agentcodehandoff-codex-send`
 - `agentcodehandoff-hermes-send`
+- `agentcodehandoff-claude-send`
 - `agentcodehandoff-codex-request`
 - `agentcodehandoff-hermes-request`
+- `agentcodehandoff-claude-request`
 - `agentcodehandoff-codex-claim`
 - `agentcodehandoff-hermes-claim`
+- `agentcodehandoff-claude-claim`
 - `agentcodehandoff-codex-done`
 - `agentcodehandoff-hermes-done`
+- `agentcodehandoff-claude-done`
 - `agentcodehandoff-codex-blocked`
 - `agentcodehandoff-hermes-blocked`
+- `agentcodehandoff-claude-blocked`
 - `agentcodehandoff-codex-review`
 - `agentcodehandoff-hermes-review`
+- `agentcodehandoff-claude-review`
 - `agentcodehandoff-codex-release`
 - `agentcodehandoff-hermes-release`
+- `agentcodehandoff-claude-release`
 
 ## Typical Workflow
 
@@ -504,7 +518,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 
 It shows:
 
-- bridge health for Codex and Hermes
+- bridge health for Codex, Hermes, and Claude
 - latest handoffs
 - workflow events like `request`, `blocked`, `review`, and `done`
 - open claims
@@ -554,12 +568,14 @@ agentcodehandoff session-end --agent codex --scope parser-pass
 
 - `hermes` uses `hermes chat -Q -q`
 - `codex` uses `codex --sandbox read-only exec`
+- `claude` uses `claude -p`
 
 Example:
 
 ```bash
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
+agentcodehandoff-claude-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff auto-status
 ```
 
@@ -572,6 +588,9 @@ agentcodehandoff-hermes-auto \
 ```
 
 Notes:
+
+- `claude` requires a valid Claude Code CLI login in the shell environment where the bridge runs.
+- smart routing automatically deprioritizes agents with auth, rate-limit, or paused bridge failures when supervision state is available.
 
 - this works only in a real terminal environment where Hermes and Codex can reach their providers
 - it is not expected to work inside a restricted offline sandbox

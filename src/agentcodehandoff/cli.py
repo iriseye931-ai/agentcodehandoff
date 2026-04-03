@@ -33,7 +33,65 @@ REQUEST_STALE_SECONDS = 300
 REQUEST_ESCALATE_SECONDS = 900
 BRIDGE_EVENT_HISTORY = 8
 BRIDGE_COOL_OFF_SECONDS = 300
-SUPPORTED_AGENTS = ("codex", "hermes")
+SUPPORTED_AGENTS = ("codex", "hermes", "claude")
+DEFAULT_ROUTE_AGENT = "codex"
+AGENT_ROUTING_PROFILES: dict[str, dict[str, Any]] = {
+    "codex": {
+        "keywords": {
+            "bug": 4,
+            "fix": 4,
+            "test": 4,
+            "refactor": 4,
+            "cli": 3,
+            "build": 3,
+            "compile": 3,
+            "implementation": 3,
+            "code": 2,
+            "patch": 3,
+            "error": 3,
+            "stack trace": 4,
+            "performance": 3,
+        },
+        "file_tokens": [".py", ".ts", ".tsx", ".js", ".rs", ".go", ".sh"],
+        "file_bonus": 3,
+    },
+    "hermes": {
+        "keywords": {
+            "readme": 4,
+            "docs": 4,
+            "documentation": 4,
+            "copy": 3,
+            "wording": 3,
+            "ux": 3,
+            "review": 2,
+            "summary": 2,
+            "explain": 2,
+            "install": 3,
+            "guide": 3,
+        },
+        "file_tokens": [".md", "readme"],
+        "file_bonus": 4,
+    },
+    "claude": {
+        "keywords": {
+            "architecture": 5,
+            "design": 4,
+            "planning": 5,
+            "plan": 4,
+            "strategy": 4,
+            "review": 4,
+            "ambiguous": 4,
+            "debug": 4,
+            "investigate": 4,
+            "complex": 3,
+            "tradeoff": 4,
+            "safety": 3,
+            "migration": 3,
+        },
+        "file_tokens": ["architecture", "design", "plan"],
+        "file_bonus": 2,
+    },
+}
 
 
 def _default_agents() -> list[str]:
@@ -46,6 +104,11 @@ def _default_peer(agent: str) -> str:
         if candidate != normalized:
             return candidate
     return ""
+
+
+def _alternate_agents(agent: str) -> list[str]:
+    normalized = str(agent).strip().lower()
+    return [candidate for candidate in SUPPORTED_AGENTS if candidate != normalized]
 
 
 def _now_iso() -> str:
@@ -292,7 +355,7 @@ def _classify_error(text: str) -> str:
         return "missing-dependency"
     if "quota" in lowered or "rate limit" in lowered:
         return "rate-limit"
-    if "auth" in lowered or "permission" in lowered or "unauthorized" in lowered:
+    if "not logged in" in lowered or "login" in lowered or "auth" in lowered or "permission" in lowered or "unauthorized" in lowered:
         return "auth"
     if "git" in lowered or "worktree" in lowered or "repo" in lowered:
         return "repo"
@@ -301,6 +364,39 @@ def _classify_error(text: str) -> str:
 
 def _is_hard_failure(failure_class: str) -> bool:
     return failure_class in {"auth", "missing-dependency", "repo"}
+
+
+def _agent_availability(home: Path, inbox_path: Path, agent: str) -> dict[str, Any]:
+    status = _supervised_bridge_status(home, inbox_path, agent)
+    automation_state = status.get("automation_state", {}) if isinstance(status.get("automation_state"), dict) else {}
+    last_error = str(automation_state.get("last_error", "")).strip()
+    failure_class = str(status.get("failure_class", "")).strip() or _classify_error(last_error)
+    available = True
+    penalty = 0
+    reason = ""
+    if failure_class in {"auth", "missing-dependency"}:
+        available = False
+        penalty = 1000
+        reason = failure_class
+    elif failure_class == "rate-limit":
+        available = False
+        penalty = 250
+        reason = failure_class
+    elif bool(status.get("lock", {}).get("paused", False)) if isinstance(status.get("lock"), dict) else False:
+        available = False
+        penalty = 250
+        reason = "paused"
+    elif bool(status.get("profile")) and not bool(status.get("healthy")):
+        penalty = 25
+        reason = "degraded"
+    return {
+        "available": available,
+        "penalty": penalty,
+        "reason": reason,
+        "status": status,
+        "last_error": last_error,
+        "failure_class": failure_class,
+    }
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -513,71 +609,65 @@ def _pending_messages_for_agent(messages: list[dict[str, Any]], agent: str, seen
 
 
 def _routing_score(agent: str, text: str, files: list[str]) -> tuple[int, list[str]]:
+    profile = AGENT_ROUTING_PROFILES.get(agent, {})
     score = 0
     reasons: list[str] = []
     lowered = text.lower()
     file_text = " ".join(files).lower()
-    if agent == "hermes":
-        rules = {
-            "readme": 4,
-            "docs": 4,
-            "documentation": 4,
-            "copy": 3,
-            "wording": 3,
-            "ux": 3,
-            "review": 2,
-            "summary": 2,
-            "explain": 2,
-            "install": 3,
-            "guide": 3,
-        }
+    rules = profile.get("keywords", {})
+    if isinstance(rules, dict):
         for key, weight in rules.items():
             if key in lowered:
-                score += weight
-                reasons.append(key)
-        if ".md" in file_text or "readme" in file_text:
-            score += 4
-            reasons.append("markdown-files")
-    else:
-        rules = {
-            "bug": 4,
-            "fix": 4,
-            "test": 4,
-            "refactor": 4,
-            "cli": 3,
-            "build": 3,
-            "compile": 3,
-            "implementation": 3,
-            "code": 2,
-            "patch": 3,
-            "error": 3,
-            "stack trace": 4,
-        }
-        for key, weight in rules.items():
-            if key in lowered:
-                score += weight
-                reasons.append(key)
-        if any(token in file_text for token in [".py", ".ts", ".tsx", ".js", ".rs", ".go", ".sh"]):
-            score += 3
-            reasons.append("code-files")
+                score += int(weight)
+                reasons.append(str(key))
+    file_tokens = profile.get("file_tokens", [])
+    if isinstance(file_tokens, list) and any(str(token).lower() in file_text for token in file_tokens):
+        file_bonus = int(profile.get("file_bonus", 0) or 0)
+        if file_bonus:
+            score += file_bonus
+            reasons.append("file-match")
     return score, reasons
 
 
-def _recommend_agent(summary: str, details: str, files: list[str]) -> tuple[str, dict[str, Any]]:
+def _recommend_agent(summary: str, details: str, files: list[str], *, home: Path | None = None, inbox_path: Path | None = None) -> tuple[str, dict[str, Any]]:
     combined = " ".join(part for part in [summary, details] if part).strip()
-    hermes_score, hermes_reasons = _routing_score("hermes", combined, files)
-    codex_score, codex_reasons = _routing_score("codex", combined, files)
-    if codex_score > hermes_score:
-        return "codex", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
-    if hermes_score > codex_score:
-        return "hermes", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
-    if any(item.lower().endswith(".md") for item in files):
-        hermes_score += 1
-        hermes_reasons.append("markdown-tiebreak")
-        return "hermes", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
-    codex_score += 1
-    codex_reasons.append("code-default")
-    return "codex", {"scores": {"codex": codex_score, "hermes": hermes_score}, "reasons": {"codex": codex_reasons, "hermes": hermes_reasons}}
+    scores: dict[str, int] = {}
+    reasons: dict[str, list[str]] = {}
+    availability: dict[str, dict[str, Any]] = {}
+    for agent in SUPPORTED_AGENTS:
+        score, why = _routing_score(agent, combined, files)
+        if home is not None and inbox_path is not None:
+            agent_state = _agent_availability(home, inbox_path, agent)
+            availability[agent] = agent_state
+            penalty = int(agent_state.get("penalty", 0) or 0)
+            if penalty:
+                score -= penalty
+                reason = str(agent_state.get("reason", "")).strip() or "unavailable"
+                why.append(f"availability:{reason}")
+        scores[agent] = score
+        reasons[agent] = why
+
+    ranked = sorted(SUPPORTED_AGENTS, key=lambda agent: (scores[agent], agent == DEFAULT_ROUTE_AGENT), reverse=True)
+    highest_score = scores[ranked[0]]
+    tied = [agent for agent in ranked if scores[agent] == highest_score]
+
+    chosen = ranked[0]
+    if len(tied) > 1:
+        if any(item.lower().endswith(".md") for item in files) and "hermes" in tied:
+            chosen = "hermes"
+            scores["hermes"] += 1
+            reasons["hermes"].append("markdown-tiebreak")
+        elif any(key in combined.lower() for key in ("architecture", "plan", "review", "debug")) and "claude" in tied:
+            chosen = "claude"
+            scores["claude"] += 1
+            reasons["claude"].append("analysis-tiebreak")
+        elif DEFAULT_ROUTE_AGENT in tied:
+            chosen = DEFAULT_ROUTE_AGENT
+            scores[DEFAULT_ROUTE_AGENT] += 1
+            reasons[DEFAULT_ROUTE_AGENT].append("default-tiebreak")
+
+    ranking = sorted(SUPPORTED_AGENTS, key=lambda agent: scores[agent], reverse=True)
+    return chosen, {"scores": scores, "reasons": reasons, "ranking": ranking, "availability": availability}
 
 
 def _agent_prompt(agent: str, repo: Path, message: dict[str, Any]) -> str:
@@ -649,11 +739,38 @@ def _run_codex_auto(prompt: str, repo: Path) -> dict[str, Any]:
     return parsed
 
 
+def _run_claude_auto(prompt: str, repo: Path) -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            str(shutil.which("claude") or "/Users/iris/.local/bin/claude"),
+            "-p",
+            "--output-format",
+            "text",
+            "--permission-mode",
+            "bypassPermissions",
+            "--system-prompt",
+            "Return JSON only. Do not include markdown fences or extra text.",
+            prompt,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+    parsed = _extract_json_object(combined)
+    if not parsed:
+        raise RuntimeError(f"claude automation did not return JSON: {combined.strip()[:500]}")
+    return parsed
+
+
 def _run_auto_agent(agent: str, prompt: str, repo: Path) -> dict[str, Any]:
     if agent == "hermes":
         return _run_hermes_auto(prompt, repo)
     if agent == "codex":
         return _run_codex_auto(prompt, repo)
+    if agent == "claude":
+        return _run_claude_auto(prompt, repo)
     raise ValueError(f"unsupported auto agent: {agent}")
 
 
@@ -2080,10 +2197,16 @@ def cmd_request_resolve(args: argparse.Namespace) -> None:
 
 def cmd_route(args: argparse.Namespace) -> None:
     files = _split_files(args.files or "")
-    agent, meta = _recommend_agent(args.summary, args.details, files)
+    agent, meta = _recommend_agent(args.summary, args.details, files, home=args.home, inbox_path=args.inbox_path)
     print(f"recommended_agent: {agent}")
-    print(f"codex_score: {meta['scores']['codex']}")
-    print(f"hermes_score: {meta['scores']['hermes']}")
+    for candidate in meta.get("ranking", SUPPORTED_AGENTS):
+        print(f"{candidate}_score: {meta['scores'][candidate]}")
+        availability = meta.get("availability", {}).get(candidate, {})
+        if availability:
+            available_text = "yes" if bool(availability.get("available", True)) else "no"
+            reason = str(availability.get("reason", "")).strip()
+            suffix = f" ({reason})" if reason else ""
+            print(f"{candidate}_available: {available_text}{suffix}")
     if meta["reasons"][agent]:
         print("reasons:", ", ".join(meta["reasons"][agent]))
 
@@ -2094,7 +2217,7 @@ def cmd_dispatch(args: argparse.Namespace) -> None:
     meta: dict[str, Any] | None = None
     rerouted = False
     if args.route == "smart":
-        chosen, meta = _recommend_agent(args.summary, args.details, files)
+        chosen, meta = _recommend_agent(args.summary, args.details, files, home=args.home, inbox_path=args.inbox_path)
     if chosen == args.from_agent and not args.allow_self_route:
         chosen = _default_peer(args.from_agent) or chosen
         rerouted = True
@@ -2112,8 +2235,8 @@ def cmd_dispatch(args: argparse.Namespace) -> None:
     )
     if meta is not None:
         print(f"routed_to: {chosen}")
-        print(f"codex_score: {meta['scores']['codex']}")
-        print(f"hermes_score: {meta['scores']['hermes']}")
+        for candidate in meta.get("ranking", SUPPORTED_AGENTS):
+            print(f"{candidate}_score: {meta['scores'][candidate]}")
         if meta["reasons"][chosen]:
             print("reasons:", ", ".join(meta["reasons"][chosen]))
         if rerouted:
@@ -2765,7 +2888,7 @@ def cmd_auto(args: argparse.Namespace) -> None:
                     args.inbox_path,
                     {
                         "from": args.agent,
-                        "to": str(message.get("from", "")).strip() or "codex",
+                        "to": str(message.get("from", "")).strip() or _default_peer(args.agent) or DEFAULT_ROUTE_AGENT,
                         "role": "handoff",
                         "task": str(message.get("task", "")).strip() or "auto-response",
                         "summary": summary,
@@ -3568,7 +3691,7 @@ def build_parser() -> argparse.ArgumentParser:
     supervise_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS, help="restart counting window for max-restarts")
     supervise_parser.set_defaults(func=cmd_supervise)
 
-    auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
+    auto_status_parser = subparsers.add_parser("auto-status", help="show whether auto bridges appear alive")
     auto_status_parser.add_argument("--agents", nargs="+", default=_default_agents())
     auto_status_parser.set_defaults(func=cmd_auto_status)
 
@@ -3800,7 +3923,7 @@ def build_parser() -> argparse.ArgumentParser:
     request_resolve_parser.add_argument("--task", default="", help="optional override task")
     request_resolve_parser.set_defaults(func=cmd_request_resolve)
 
-    route_parser = subparsers.add_parser("route", help="recommend Codex or Hermes for a request")
+    route_parser = subparsers.add_parser("route", help="recommend the best agent for a request")
     route_parser.add_argument("--summary", required=True)
     route_parser.add_argument("--details", default="")
     route_parser.add_argument("--files", default="", help="comma-separated file list")
