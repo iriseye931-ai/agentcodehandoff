@@ -386,6 +386,7 @@ What supervision adds:
 - pid and heartbeat tracking
 - pending request visibility
 - log file paths for bridge output
+- restart counts and failure classification
 - lifecycle commands to start, stop, restart, and inspect bridges
 
 Core commands:

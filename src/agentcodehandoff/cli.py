@@ -27,6 +27,8 @@ DASHBOARD_RECENT_MESSAGES = 8
 RECENT_WORKFLOW_MESSAGES = 6
 TERMINAL_FALLBACK_SIZE = (120, 40)
 BRIDGE_HEARTBEAT_SECONDS = 10
+BRIDGE_RESTART_BASE_DELAY = 2.0
+BRIDGE_RESTART_MAX_DELAY = 30.0
 
 
 def _now_iso() -> str:
@@ -162,6 +164,23 @@ def _signal_pid(pid: int, sig: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _classify_error(text: str) -> str:
+    lowered = text.lower()
+    if not lowered:
+        return ""
+    if "not return json" in lowered or "json" in lowered:
+        return "malformed-response"
+    if "not found" in lowered or "no such file" in lowered:
+        return "missing-dependency"
+    if "quota" in lowered or "rate limit" in lowered:
+        return "rate-limit"
+    if "auth" in lowered or "permission" in lowered or "unauthorized" in lowered:
+        return "auth"
+    if "git" in lowered or "worktree" in lowered or "repo" in lowered:
+        return "repo"
+    return "runtime"
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -927,18 +946,22 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "pending_count": len(pending),
         "oldest_pending_at": oldest_pending_at,
         "automation_state": automation_state,
+        "failure_class": str(lock.get("failure_class", "")).strip(),
+        "restart_count": int(lock.get("restart_count", 0) or 0),
     }
 
 
 def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     agent = str(status.get("agent", "?"))
     pid = int(status.get("pid", 0) or 0)
+    supervisor_pid = int(status.get("lock", {}).get("supervisor_pid", 0) or 0) if isinstance(status.get("lock"), dict) else 0
     healthy = bool(status.get("healthy"))
     pending_count = int(status.get("pending_count", 0) or 0)
+    restart_count = int(status.get("restart_count", 0) or 0)
     heartbeat = _parse_iso(str(status.get("lock", {}).get("last_heartbeat_at", "")).strip()) if isinstance(status.get("lock"), dict) else None
     heartbeat_text = _format_timestamp(heartbeat.isoformat()) if heartbeat else "--:--:--"
     state = "healthy" if healthy else "down"
-    return _truncate(f"{agent}: {state} | pid {pid or '-'} | pending {pending_count} | hb {heartbeat_text}", width)
+    return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} | hb {heartbeat_text} | restarts {restart_count}", width)
 
 
 def _bridge_command_args(args: argparse.Namespace, agent: str) -> list[str]:
@@ -973,6 +996,37 @@ def _bridge_command_args(args: argparse.Namespace, agent: str) -> list[str]:
     return command
 
 
+def _supervisor_command_args(args: argparse.Namespace, agent: str, log_path: Path) -> list[str]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--home",
+        str(args.home),
+        "--inbox-path",
+        str(args.inbox_path),
+        "--claims-path",
+        str(args.claims_path),
+        "--sessions-path",
+        str(args.sessions_path),
+        "supervise",
+        "--agent",
+        agent,
+        "--repo",
+        str(args.repo),
+        "--interval",
+        str(args.interval),
+        "--log-path",
+        str(log_path),
+    ]
+    if args.claim_on_files:
+        command.append("--claim-on-files")
+    if args.verbose:
+        command.append("--verbose")
+    if args.claim_scope_prefix:
+        command.extend(["--claim-scope-prefix", args.claim_scope_prefix])
+    return command
+
+
 def _print_bridge_supervision(status: dict[str, Any]) -> None:
     print(_bridge_supervision_line(status, 120))
     lock = status.get("lock", {}) if isinstance(status.get("lock"), dict) else {}
@@ -988,6 +1042,9 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
     if last_error:
         print(f"  last error: {last_error}")
+    failure_class = str(status.get("failure_class", "")).strip()
+    if failure_class:
+        print(f"  failure class: {failure_class}")
     print()
 
 
@@ -1749,7 +1806,7 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
     log_path = logs_dir / f"{args.agent}-bridge.log"
     args.log_path = str(log_path)
     log_handle = log_path.open("a", encoding="utf-8")
-    command = _bridge_command_args(args, args.agent)
+    command = _supervisor_command_args(args, args.agent, log_path)
     process = subprocess.Popen(
         command,
         cwd=args.repo,
@@ -1763,7 +1820,8 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
         _bridge_lock_path(args.home, args.agent),
         {
             "agent": args.agent,
-            "pid": process.pid,
+            "pid": 0,
+            "supervisor_pid": process.pid,
             "repo": str(args.repo),
             "started_at": _now_iso(),
             "last_heartbeat_at": "",
@@ -1771,17 +1829,20 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
             "claim_on_files": bool(args.claim_on_files),
             "log_path": str(log_path),
             "mode": "supervised",
+            "restart_count": 0,
+            "backoff_seconds": 0.0,
+            "failure_class": "",
         },
     )
     print(f"started {args.agent} bridge")
-    print(f"pid: {process.pid}")
+    print(f"supervisor pid: {process.pid}")
     print(f"log: {log_path}")
 
 
 def cmd_bridge_stop(args: argparse.Namespace) -> None:
     lock_path = _bridge_lock_path(args.home, args.agent)
     lock = _read_bridge_lock(lock_path)
-    pid = int(lock.get("pid", 0) or 0)
+    pid = int(lock.get("supervisor_pid", 0) or 0) or int(lock.get("pid", 0) or 0)
     if not pid:
         print("no supervised bridge lock found")
         return
@@ -1827,6 +1888,88 @@ def cmd_bridge_restart(args: argparse.Namespace) -> None:
         verbose=args.verbose,
     )
     cmd_bridge_start(start_args)
+
+
+def cmd_supervise(args: argparse.Namespace) -> None:
+    lock_path = _bridge_lock_path(args.home, args.agent)
+    existing = _read_bridge_lock(lock_path)
+    existing_pid = int(existing.get("supervisor_pid", 0) or 0)
+    if existing_pid and existing_pid != os.getpid() and _pid_alive(existing_pid):
+        raise SystemExit(f"supervisor already running for {args.agent} (pid {existing_pid})")
+
+    restart_count = int(existing.get("restart_count", 0) or 0)
+    while True:
+        logs_dir = args.home / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / f"{args.agent}-bridge.log"
+        command = _bridge_command_args(args, args.agent)
+        with log_path.open("a", encoding="utf-8") as log_handle:
+            process = subprocess.Popen(
+                command,
+                cwd=args.repo,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                text=True,
+            )
+
+        _write_bridge_lock(
+            lock_path,
+            {
+                "agent": args.agent,
+                "pid": process.pid,
+                "supervisor_pid": os.getpid(),
+                "repo": str(args.repo),
+                "started_at": existing.get("started_at") or _now_iso(),
+                "last_heartbeat_at": "",
+                "interval": args.interval,
+                "claim_on_files": bool(args.claim_on_files),
+                "log_path": str(log_path),
+                "mode": "supervised",
+                "restart_count": restart_count,
+                "backoff_seconds": 0.0,
+                "failure_class": "",
+            },
+        )
+
+        return_code = process.wait()
+        state = _read_automation_state(_automation_state_path(args.home, args.agent))
+        last_error = str(state.get("last_error", "")).strip()
+        failure_class = _classify_error(last_error)
+        if return_code == 0 and not args.always_restart:
+            current = _read_bridge_lock(lock_path)
+            current.update(
+                {
+                    "pid": 0,
+                    "supervisor_pid": os.getpid(),
+                    "last_exit_code": return_code,
+                    "last_exit_at": _now_iso(),
+                    "failure_class": "",
+                    "backoff_seconds": 0.0,
+                }
+            )
+            _write_bridge_lock(lock_path, current)
+            return
+
+        restart_count += 1
+        backoff = min(BRIDGE_RESTART_MAX_DELAY, BRIDGE_RESTART_BASE_DELAY * (2 ** max(0, restart_count - 1)))
+        current = _read_bridge_lock(lock_path)
+        current.update(
+            {
+                "pid": 0,
+                "supervisor_pid": os.getpid(),
+                "last_exit_code": return_code,
+                "last_exit_at": _now_iso(),
+                "failure_class": failure_class,
+                "restart_count": restart_count,
+                "backoff_seconds": backoff,
+                "last_error": last_error,
+            }
+        )
+        _write_bridge_lock(lock_path, current)
+        if args.verbose:
+            print(f"{args.agent} bridge exited with {return_code}; restarting in {backoff:.1f}s", file=sys.stderr)
+        time.sleep(backoff)
 
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
@@ -1980,6 +2123,17 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
     auto_parser.add_argument("--log-path", default="", help=argparse.SUPPRESS)
     auto_parser.set_defaults(func=cmd_auto)
+
+    supervise_parser = subparsers.add_parser("supervise", help=argparse.SUPPRESS)
+    supervise_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    supervise_parser.add_argument("--repo", type=Path, default=Path.cwd())
+    supervise_parser.add_argument("--interval", type=float, default=2.0)
+    supervise_parser.add_argument("--claim-on-files", action="store_true")
+    supervise_parser.add_argument("--claim-scope-prefix", default="auto-")
+    supervise_parser.add_argument("--verbose", action="store_true")
+    supervise_parser.add_argument("--log-path", default="")
+    supervise_parser.add_argument("--always-restart", action="store_true")
+    supervise_parser.set_defaults(func=cmd_supervise)
 
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
     auto_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
