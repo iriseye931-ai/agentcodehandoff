@@ -516,6 +516,31 @@ agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 - prints status
 - prints the next supervised bridge and ops commands to try in a real repo
 
+## Testing
+
+Run the current critical-path test suite with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The current suite covers:
+
+- `init` and `doctor` against isolated fake Codex, Hermes, and Claude CLIs
+- availability overrides and routing fallback
+- bridge preset persistence for `local-trio`
+- supervised `local-trio` startup plus an actual Claude bridge reply in an isolated temp repo
+- tracked request resolution
+
+This is the current release-hardening baseline. Before a broad public release, the suite should continue to grow around long-running bridge supervision, restart policy behavior, and drift/remediation flows.
+
+## Known Limitations
+
+- Agent bridge behavior still depends on the local Codex, Claude, and Hermes CLIs being installed and authenticated in the environment that launches the bridge.
+- Real provider/runtime differences can still surface outside the isolated fake-agent test suite.
+- The dashboard is terminal-first and intentionally lightweight; it is not a full graphical control plane.
+- The current test suite is strong on critical paths, but not yet exhaustive across every command combination.
+
 ## Wrapper Commands
 
 Installed by `agentcodehandoff init --install-wrappers`:
