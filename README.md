@@ -816,6 +816,12 @@ Before a broad public release, make sure all of these are true:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Support
+
+- bug reports: use the GitHub bug template and include `ps`, `bridge-status`, and `logs` output
+- feature requests: use the GitHub feature template
+- security issues: see [SECURITY.md](SECURITY.md) and report privately first
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md).
