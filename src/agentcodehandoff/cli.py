@@ -17,6 +17,7 @@ ENV_HOME = "AGENTCODEHANDOFF_HOME"
 DEFAULT_HOME = Path(os.environ.get(ENV_HOME, Path.home() / ".agentcodehandoff")).expanduser()
 DEFAULT_INBOX_PATH = DEFAULT_HOME / "inbox.jsonl"
 DEFAULT_CLAIMS_PATH = DEFAULT_HOME / "claims.json"
+DEFAULT_SESSIONS_PATH = DEFAULT_HOME / "sessions.json"
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
 AUTOMATION_STALE_SECONDS = 30
@@ -43,6 +44,9 @@ def _ensure_state(home: Path, inbox_path: Path, claims_path: Path) -> None:
         inbox_path.write_text("", encoding="utf-8")
     if not claims_path.exists():
         claims_path.write_text("[]\n", encoding="utf-8")
+    sessions_path = home / "sessions.json"
+    if not sessions_path.exists():
+        sessions_path.write_text("[]\n", encoding="utf-8")
 
 
 def _normalize_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -55,8 +59,16 @@ def _normalize_args(args: argparse.Namespace) -> argparse.Namespace:
         args.claims_path = args.home / "claims.json"
     else:
         args.claims_path = Path(args.claims_path).expanduser()
+    if getattr(args, "sessions_path", None) == DEFAULT_SESSIONS_PATH:
+        args.sessions_path = args.home / "sessions.json"
+    elif getattr(args, "sessions_path", None) is not None:
+        args.sessions_path = Path(args.sessions_path).expanduser()
     if getattr(args, "bin_dir", None) is not None:
         args.bin_dir = Path(args.bin_dir).expanduser()
+    if getattr(args, "repo", None) is not None:
+        args.repo = Path(args.repo).expanduser()
+    if getattr(args, "path", None) is not None:
+        args.path = Path(args.path).expanduser()
     return args
 
 
@@ -354,6 +366,67 @@ def _write_claims(path: Path, claims: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(claims, indent=2) + "\n", encoding="utf-8")
 
 
+def _read_sessions(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _write_sessions(path: Path, sessions: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sessions, indent=2) + "\n", encoding="utf-8")
+
+
+def _active_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [session for session in sessions if str(session.get("state", "active")) == "active"]
+
+
+def _slugify(value: str) -> str:
+    pieces = []
+    current = []
+    for char in value.lower():
+        if char.isalnum():
+            current.append(char)
+        else:
+            if current:
+                pieces.append("".join(current))
+                current = []
+    if current:
+        pieces.append("".join(current))
+    return "-".join(pieces) or "session"
+
+
+def _run_git(repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _git_output(repo: Path, args: list[str]) -> str:
+    result = _run_git(repo, args)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        detail = stderr or stdout or "git command failed"
+        raise RuntimeError(detail)
+    return (result.stdout or "").strip()
+
+
+def _repo_root(repo: Path) -> Path:
+    return Path(_git_output(repo, ["rev-parse", "--show-toplevel"]))
+
+
+def _git_current_branch(repo: Path) -> str:
+    return _git_output(repo, ["branch", "--show-current"]) or "main"
+
+
 def _filter_messages(messages: list[dict[str, Any]], agent: str | None, limit: int) -> list[dict[str, Any]]:
     if agent:
         needle = agent.strip().lower()
@@ -459,6 +532,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff auto-status "$@"\n'
     elif kind == "status":
         command = 'exec agentcodehandoff status "$@"\n'
+    elif kind == "sessions":
+        command = 'exec agentcodehandoff sessions "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -528,7 +603,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status"):
+    for kind in ("dashboard", "auto-status", "status", "sessions"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -604,6 +679,14 @@ def _claim_summary_line(claim: dict[str, Any], width: int) -> str:
     return _truncate(f"{agent} [{state}] {scope}{suffix}", width)
 
 
+def _session_summary_line(session: dict[str, Any], width: int) -> str:
+    agent = str(session.get("agent", "?")).strip() or "?"
+    scope = str(session.get("scope", "")).strip() or "(no scope)"
+    branch = str(session.get("branch", "")).strip() or "(no branch)"
+    state = str(session.get("state", "active")).strip() or "active"
+    return _truncate(f"{agent} [{state}] {scope} :: {branch}", width)
+
+
 def _bridge_status_line(agent: str, state: dict[str, Any], width: int) -> str:
     last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
     now = datetime.now(timezone.utc)
@@ -676,9 +759,10 @@ def _merge_columns(left: list[str], right: list[str], gap: int = 2) -> list[str]
     return merged
 
 
-def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
+def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_path: Path) -> str:
     messages = _read_messages(inbox_path)
     claims = _read_claims(claims_path)
+    sessions = _read_sessions(sessions_path)
     latest_by_agent: dict[str, dict[str, Any]] = {}
     for message in messages:
         sender = str(message.get("from", "")).strip()
@@ -723,6 +807,7 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
         if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review"}
     ][-RECENT_WORKFLOW_MESSAGES:]
     open_claims = _open_claims(claims)
+    active_sessions = _active_sessions(sessions)
     resolved_claims = _resolved_claims(claims)[-4:]
     workflow_rows = [_message_summary_line(message, left_width - 4) for message in workflow_messages] or ["No workflow events"]
     claim_rows = [_claim_summary_line(claim, right_width - 4) for claim in open_claims] or ["No open claims"]
@@ -735,13 +820,17 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
     lines.append("")
 
     conflict_rows = _conflict_lines(claims, left_width - 4, limit=4) or ["No claim conflicts"]
-    resolved_rows = [_claim_summary_line(claim, right_width - 4) for claim in resolved_claims] or ["No resolved claims"]
+    session_rows = [_session_summary_line(session, right_width - 4) for session in active_sessions[-4:]] or ["No active sessions"]
     lines.extend(
         _merge_columns(
             _render_panel("Conflicts", conflict_rows, left_width, height=8),
-            _render_panel("Recently Resolved", resolved_rows, right_width, height=8),
+            _render_panel("Active Sessions", session_rows, right_width, height=8),
         )
     )
+    lines.append("")
+
+    resolved_rows = [_claim_summary_line(claim, total_width - 4) for claim in resolved_claims] or ["No resolved claims"]
+    lines.extend(_render_panel("Recently Resolved", resolved_rows, total_width, height=8))
     lines.append("")
 
     recent_rows: list[str] = []
@@ -874,6 +963,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     messages = _read_messages(args.inbox_path)
     claims = _read_claims(args.claims_path)
+    sessions = _read_sessions(args.sessions_path)
     latest_by_agent: dict[str, dict[str, Any]] = {}
     for message in messages:
         sender = str(message.get("from", "")).strip()
@@ -938,6 +1028,19 @@ def cmd_status(args: argparse.Namespace) -> None:
         for claim in resolved_claims:
             _print_claim(claim)
 
+    print("Active sessions")
+    print()
+    active_sessions = _active_sessions(sessions)
+    if not active_sessions:
+        print("none")
+        print()
+    else:
+        for session in active_sessions[-args.sessions_limit:]:
+            print(_session_summary_line(session, 120))
+            print(f"  path: {session.get('worktree_path', '')}")
+            print(f"  repo: {session.get('repo_root', '')}")
+            print()
+
 
 def cmd_claim(args: argparse.Namespace) -> None:
     claims = _read_claims(args.claims_path)
@@ -969,6 +1072,104 @@ def cmd_claims(args: argparse.Namespace) -> None:
     claims = claims[-args.limit:]
     for claim in claims:
         _print_claim(claim)
+
+
+def cmd_session_start(args: argparse.Namespace) -> None:
+    repo_root = _repo_root(args.repo)
+    scope_slug = _slugify(args.scope)
+    branch = args.branch or f"ach/{args.agent}/{scope_slug}"
+    base_ref = args.base_ref or _git_current_branch(repo_root)
+    default_path = repo_root / ".worktrees" / f"{args.agent}-{scope_slug}"
+    worktree_path = (args.path or default_path).expanduser()
+
+    sessions = _read_sessions(args.sessions_path)
+    existing_active = [
+        session for session in _active_sessions(sessions)
+        if str(session.get("agent", "")).lower() == args.agent.lower()
+        and str(session.get("scope", "")) == args.scope
+    ]
+    if existing_active:
+        raise SystemExit("an active session already exists for this agent and scope")
+    if worktree_path.exists():
+        raise SystemExit(f"worktree path already exists: {worktree_path}")
+
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    result = _run_git(repo_root, ["worktree", "add", "-b", branch, str(worktree_path), base_ref])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise SystemExit(detail or "failed to create worktree")
+
+    session = {
+        "id": f"session-{datetime.now(timezone.utc).timestamp():.6f}",
+        "timestamp": _now_iso(),
+        "agent": args.agent,
+        "scope": args.scope,
+        "branch": branch,
+        "base_ref": base_ref,
+        "repo_root": str(repo_root),
+        "worktree_path": str(worktree_path),
+        "state": "active",
+        "claim_scope": args.claim_scope or "",
+        "note": args.note,
+    }
+    sessions.append(session)
+    _write_sessions(args.sessions_path, sessions)
+
+    print(f"agent: {session['agent']}")
+    print(f"scope: {session['scope']}")
+    print(f"branch: {session['branch']}")
+    print(f"base_ref: {session['base_ref']}")
+    print(f"repo_root: {session['repo_root']}")
+    print(f"worktree_path: {session['worktree_path']}")
+
+
+def cmd_sessions(args: argparse.Namespace) -> None:
+    sessions = _read_sessions(args.sessions_path)
+    if args.agent:
+        sessions = [session for session in sessions if str(session.get("agent", "")).lower() == args.agent.lower()]
+    if not args.all:
+        sessions = _active_sessions(sessions)
+    sessions = sessions[-args.limit:]
+    if not sessions:
+        print("no sessions")
+        return
+    for session in sessions:
+        print(_session_summary_line(session, 120))
+        print(f"  path: {session.get('worktree_path', '')}")
+        print(f"  repo: {session.get('repo_root', '')}")
+        base_ref = str(session.get("base_ref", "")).strip()
+        if base_ref:
+            print(f"  base: {base_ref}")
+        note = str(session.get("note", "")).strip()
+        if note:
+            print(f"  note: {note}")
+        print()
+
+
+def cmd_session_end(args: argparse.Namespace) -> None:
+    sessions = _read_sessions(args.sessions_path)
+    updated = False
+    for session in sessions:
+        matches_agent = str(session.get("agent", "")).lower() == args.agent.lower()
+        matches_scope = args.scope and str(session.get("scope", "")) == args.scope
+        if matches_agent and (matches_scope or not args.scope) and str(session.get("state", "active")) == "active":
+            repo_root = Path(str(session.get("repo_root", "")))
+            worktree_path = Path(str(session.get("worktree_path", "")))
+            if not args.keep_worktree:
+                result = _run_git(repo_root, ["worktree", "remove", "--force", str(worktree_path)])
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "").strip()
+                    raise SystemExit(detail or f"failed to remove worktree {worktree_path}")
+            session["state"] = "closed"
+            session["closed_at"] = _now_iso()
+            session["close_note"] = args.note
+            session["kept_worktree"] = bool(args.keep_worktree)
+            updated = True
+    _write_sessions(args.sessions_path, sessions)
+    if not updated:
+        print("no matching active sessions")
+    else:
+        print("sessions closed")
 
 
 def cmd_resolve(args: argparse.Namespace) -> None:
@@ -1087,7 +1288,7 @@ def cmd_auto_status(args: argparse.Namespace) -> None:
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
     while True:
-        output = _render_dashboard(args.home, args.inbox_path, args.claims_path)
+        output = _render_dashboard(args.home, args.inbox_path, args.claims_path, args.sessions_path)
         sys.stdout.write("\x1b[2J\x1b[H")
         sys.stdout.write(output + "\n")
         sys.stdout.flush()
@@ -1129,6 +1330,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"home: {args.home}")
     print(f"inbox: {args.inbox_path}")
     print(f"claims: {args.claims_path}")
+    print(f"sessions: {args.sessions_path}")
     if created_messages:
         print("seeded:", ", ".join(created_messages))
     if wrappers:
@@ -1148,6 +1350,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         (f"home exists: {args.home}", args.home.exists(), "present" if args.home.exists() else "missing"),
         (f"inbox file: {args.inbox_path}", args.inbox_path.exists(), "present" if args.inbox_path.exists() else "missing"),
         (f"claims file: {args.claims_path}", args.claims_path.exists(), "present" if args.claims_path.exists() else "missing"),
+        (f"sessions file: {args.sessions_path}", args.sessions_path.exists(), "present" if args.sessions_path.exists() else "missing"),
         (
             f"inbox writable: {args.inbox_path}",
             args.inbox_path.exists() and os.access(args.inbox_path, os.W_OK),
@@ -1157,6 +1360,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             f"claims writable: {args.claims_path}",
             args.claims_path.exists() and os.access(args.claims_path, os.W_OK),
             "yes" if args.claims_path.exists() and os.access(args.claims_path, os.W_OK) else "no",
+        ),
+        (
+            f"sessions writable: {args.sessions_path}",
+            args.sessions_path.exists() and os.access(args.sessions_path, os.W_OK),
+            "yes" if args.sessions_path.exists() and os.access(args.sessions_path, os.W_OK) else "no",
         ),
     ]
 
@@ -1203,6 +1411,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--home", type=Path, default=DEFAULT_HOME, help=f"state directory (default: ${ENV_HOME} or ~/.agentcodehandoff)")
     parser.add_argument("--inbox-path", type=Path, default=DEFAULT_INBOX_PATH, help="shared inbox file path")
     parser.add_argument("--claims-path", type=Path, default=DEFAULT_CLAIMS_PATH, help="shared claims file path")
+    parser.add_argument("--sessions-path", type=Path, default=DEFAULT_SESSIONS_PATH, help="shared session state file path")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="create local state and optional shell wrappers")
@@ -1256,6 +1465,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     status_parser.add_argument("--workflow-limit", type=int, default=6)
     status_parser.add_argument("--resolved-limit", type=int, default=5)
+    status_parser.add_argument("--sessions-limit", type=int, default=5)
     status_parser.set_defaults(func=cmd_status)
 
     send_parser = subparsers.add_parser("send", help="send an agent handoff")
@@ -1338,6 +1548,30 @@ def build_parser() -> argparse.ArgumentParser:
     claims_parser.add_argument("--limit", type=int, default=20)
     claims_parser.add_argument("--all", action="store_true", help="include released claims")
     claims_parser.set_defaults(func=cmd_claims)
+
+    session_start_parser = subparsers.add_parser("session-start", help="create a git worktree-backed agent session")
+    session_start_parser.add_argument("--agent", required=True)
+    session_start_parser.add_argument("--scope", required=True)
+    session_start_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repository path")
+    session_start_parser.add_argument("--branch", help="branch name for the worktree")
+    session_start_parser.add_argument("--base-ref", help="branch or ref to branch from")
+    session_start_parser.add_argument("--path", type=Path, help="worktree path to create")
+    session_start_parser.add_argument("--claim-scope", help="optional linked claim scope")
+    session_start_parser.add_argument("--note", default="")
+    session_start_parser.set_defaults(func=cmd_session_start)
+
+    sessions_parser = subparsers.add_parser("sessions", help="list agent worktree sessions")
+    sessions_parser.add_argument("--agent", help="filter sessions by agent")
+    sessions_parser.add_argument("--limit", type=int, default=20)
+    sessions_parser.add_argument("--all", action="store_true", help="include closed sessions")
+    sessions_parser.set_defaults(func=cmd_sessions)
+
+    session_end_parser = subparsers.add_parser("session-end", help="close an agent worktree session")
+    session_end_parser.add_argument("--agent", required=True)
+    session_end_parser.add_argument("--scope", help="close only a specific scope")
+    session_end_parser.add_argument("--keep-worktree", action="store_true", help="mark the session closed without removing the worktree")
+    session_end_parser.add_argument("--note", default="")
+    session_end_parser.set_defaults(func=cmd_session_end)
 
     resolve_parser = subparsers.add_parser("resolve", help="close claims with a final state")
     resolve_parser.add_argument("--agent", required=True)

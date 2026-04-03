@@ -40,6 +40,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - Lightweight claim board for file and scope ownership
 - Workflow updates for `request`, `done`, `blocked`, and `review`
 - Claim resolution with final states like `completed`, `blocked`, and `abandoned`
+- Git worktree-backed agent sessions for isolated edit space
 - Terminal-first workflow for two or more agents in one repo
 - Paneled terminal dashboard for bridge health, workflow, claims, conflicts, and recent messages
 - Local-first state with no daemon required
@@ -173,6 +174,31 @@ agentcodehandoff resolve \
   --note "Merged and verified locally."
 ```
 
+Start an isolated worktree session:
+
+```bash
+agentcodehandoff session-start \
+  --agent codex \
+  --scope parser-pass \
+  --repo /path/to/repo \
+  --note "Isolated parser refactor worktree"
+```
+
+List sessions:
+
+```bash
+agentcodehandoff sessions
+```
+
+Close a session and remove its worktree:
+
+```bash
+agentcodehandoff session-end \
+  --agent codex \
+  --scope parser-pass \
+  --note "Merged and cleaned up"
+```
+
 ## Core Commands
 
 ```bash
@@ -187,6 +213,7 @@ agentcodehandoff dashboard
 agentcodehandoff-dashboard
 agentcodehandoff-status
 agentcodehandoff claims
+agentcodehandoff sessions
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 ```
 
@@ -207,6 +234,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-dashboard`
 - `agentcodehandoff-auto-status`
 - `agentcodehandoff-status`
+- `agentcodehandoff-sessions`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-codex-read`
@@ -251,6 +279,34 @@ It shows:
 - claim conflicts
 - recently resolved claims
 - recent message traffic
+- active worktree sessions
+
+## Worktree Sessions
+
+`agentcodehandoff` can manage isolated git worktrees per agent and scope.
+
+Use this when you want:
+
+- one agent per branch/worktree
+- clean physical separation of edits
+- session state that matches claim state
+- dashboard visibility into who owns which workspace
+
+By default, sessions create worktrees under:
+
+- `<repo>/.worktrees/<agent>-<scope-slug>`
+
+Default branch naming:
+
+- `ach/<agent>/<scope-slug>`
+
+Core commands:
+
+```bash
+agentcodehandoff session-start --agent codex --scope parser-pass --repo /path/to/repo
+agentcodehandoff sessions
+agentcodehandoff session-end --agent codex --scope parser-pass
+```
 
 ## Auto Reply
 
@@ -312,6 +368,7 @@ agentcodehandoff dispatch \
 - Default state directory: `~/.agentcodehandoff`
 - Override with `AGENTCODEHANDOFF_HOME`
 - Default wrapper directory: `~/.local/bin`
+- Default session state file: `~/.agentcodehandoff/sessions.json`
 
 ## Positioning
 
@@ -328,7 +385,6 @@ It is the coordination layer you add when multiple coding agents already exist a
 - interactive TUI
 - file change awareness
 - repo-aware claim suggestions
-- git worktree helpers
 - notifications
 - optional HTTP/WebSocket relay
 
