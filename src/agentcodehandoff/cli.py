@@ -954,6 +954,10 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff remediate "$@"\n'
     elif kind == "bridge-status":
         command = 'exec agentcodehandoff bridge-status "$@"\n'
+    elif kind == "bridge-recover":
+        command = 'exec agentcodehandoff bridge-recover "$@"\n'
+    elif kind == "ops":
+        command = 'exec agentcodehandoff dashboard --view ops "$@"\n'
     elif kind == "request-approve":
         command = 'exec agentcodehandoff request-approve "$@"\n'
     elif kind == "request-close":
@@ -1031,7 +1035,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "request-approve", "request-close", "request-escalate", "request-resolve"):
+    for kind in ("dashboard", "ops", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "request-approve", "request-close", "request-escalate", "request-resolve"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1408,6 +1412,83 @@ def _supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) 
         if len(lines) >= limit:
             break
     return lines[:limit]
+
+
+def _ops_request_rows(request_records: list[dict[str, Any]], width: int, limit: int = 8) -> list[str]:
+    rows: list[str] = []
+    for record in request_records:
+        if str(record.get("state", "")).strip() in {"stale", "blocked", "escalated"}:
+            rows.append(_request_status_line(record, width))
+        elif str(record.get("state", "")).strip() == "acknowledged":
+            age_seconds = record.get("age_seconds")
+            if isinstance(age_seconds, (int, float)) and age_seconds >= 60:
+                rows.append(_request_status_line(record, width))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) -> list[str]:
+    rows: list[str] = []
+    for agent in ("codex", "hermes"):
+        status = _supervised_bridge_status(home, inbox_path, agent)
+        unhealthy = not bool(status.get("healthy")) or bool(status.get("failure_class")) or int(status.get("pending_count", 0) or 0) > 0
+        if not unhealthy:
+            continue
+        rows.append(_bridge_supervision_line(status, width))
+        failure_class = str(status.get("failure_class", "")).strip()
+        if failure_class:
+            rows.append(_truncate(f"  failure={failure_class}", width))
+        oldest_pending_at = str(status.get("oldest_pending_at", "")).strip()
+        if oldest_pending_at:
+            rows.append(_truncate(f"  oldest pending={_format_timestamp(oldest_pending_at)}", width))
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+
+def _render_ops_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_path: Path) -> str:
+    messages = _read_messages(inbox_path)
+    claims = _read_claims(claims_path)
+    sessions = _read_sessions(sessions_path)
+    request_records = _request_records(messages)
+    size = _terminal_size()
+    total_width = max(80, size.columns)
+    left_width = max(38, (total_width - 2) // 2)
+    right_width = max(38, total_width - left_width - 2)
+    timestamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+    lines: list[str] = []
+    lines.append("AgentCodeHandoff Ops")
+    lines.append("=" * total_width)
+    lines.append(_truncate(f"Actionable issues only | {timestamp} | home {home}", total_width))
+    lines.append("")
+
+    lines.extend(
+        _merge_columns(
+            _render_panel("Bridge Problems", _ops_supervision_rows(home, inbox_path, left_width - 4, limit=8) or ["No bridge issues"], left_width, height=10),
+            _render_panel("Stale Requests", _ops_request_rows(request_records, right_width - 4, limit=8) or ["No stale requests"], right_width, height=10),
+        )
+    )
+    lines.append("")
+
+    lines.extend(
+        _merge_columns(
+            _render_panel("Claim Conflicts", _conflict_lines(claims, left_width - 4, limit=8) or ["No claim conflicts"], left_width, height=10),
+            _render_panel("Session Drift", _drift_lines(sessions, claims, right_width - 4, limit=8) or ["No session drift"], right_width, height=10),
+        )
+    )
+    lines.append("")
+
+    urgent_messages = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"blocked", "escalated", "review"}
+    ][-8:]
+    recent_rows = [_message_summary_line(message, total_width - 4) for message in urgent_messages] or ["No urgent workflow events"]
+    lines.extend(_render_panel("Urgent Workflow", recent_rows, total_width, height=10))
+    lines.append("")
+    lines.append("Ctrl-C to exit")
+    return "\n".join(lines)
 
 
 def _request_status_line(record: dict[str, Any], width: int) -> str:
@@ -2410,6 +2491,8 @@ def cmd_auto(args: argparse.Namespace) -> None:
             "backoff_seconds": float(existing.get("backoff_seconds", 0.0) or 0.0),
             "failure_class": str(existing.get("failure_class", "")).strip(),
             "recent_events": existing.get("recent_events", []),
+            "max_restarts": int(existing.get("max_restarts", getattr(args, "max_restarts", 0)) or getattr(args, "max_restarts", 0)),
+            "cool_off_seconds": float(existing.get("cool_off_seconds", getattr(args, "cool_off_seconds", 0.0)) or getattr(args, "cool_off_seconds", 0.0)),
         }
         _write_bridge_lock(lock_path, payload)
 
@@ -2429,6 +2512,8 @@ def cmd_auto(args: argparse.Namespace) -> None:
                         "claim_on_files": bool(args.claim_on_files),
                         "log_path": args.log_path,
                         "mode": "supervised",
+                        "max_restarts": int(lock.get("max_restarts", getattr(args, "max_restarts", 0)) or getattr(args, "max_restarts", 0)),
+                        "cool_off_seconds": float(lock.get("cool_off_seconds", getattr(args, "cool_off_seconds", 0.0)) or getattr(args, "cool_off_seconds", 0.0)),
                     }
                 )
                 if not lock.get("started_at"):
@@ -2648,6 +2733,44 @@ def cmd_bridge_restart(args: argparse.Namespace) -> None:
     cmd_bridge_start(start_args)
 
 
+def cmd_bridge_recover(args: argparse.Namespace) -> None:
+    agents = args.agents or ["codex", "hermes"]
+    recovered = False
+    for agent in agents:
+        status = _supervised_bridge_status(args.home, args.inbox_path, agent)
+        should_restart = args.force or (not bool(status.get("healthy")) and (bool(status.get("failure_class")) or not bool(status.get("alive")) or bool(status.get("lock", {}).get("paused", False))))
+        if not should_restart:
+            print(f"{agent}: no recovery needed")
+            continue
+        lock = status.get("lock", {}) if isinstance(status.get("lock"), dict) else {}
+        repo = Path(str(lock.get("repo", "")).strip() or str(args.repo))
+        common_args = argparse.Namespace(
+            home=args.home,
+            inbox_path=args.inbox_path,
+            claims_path=args.claims_path,
+            sessions_path=args.sessions_path,
+            agent=agent,
+            repo=repo,
+            interval=float(lock.get("interval", args.interval) or args.interval),
+            claim_on_files=bool(lock.get("claim_on_files", args.claim_on_files)),
+            claim_scope_prefix=str(lock.get("claim_scope_prefix", args.claim_scope_prefix) or args.claim_scope_prefix),
+            verbose=args.verbose,
+            timeout=args.timeout,
+            auto_sweep=bool(lock.get("auto_sweep", args.auto_sweep)),
+            sweep_interval=float(lock.get("sweep_interval", args.sweep_interval) or args.sweep_interval),
+            max_restarts=int(lock.get("max_restarts", args.max_restarts) or args.max_restarts),
+            cool_off_seconds=float(lock.get("cool_off_seconds", args.cool_off_seconds) or args.cool_off_seconds),
+        )
+        if lock and (int(lock.get("supervisor_pid", 0) or 0) or int(lock.get("pid", 0) or 0)):
+            common_args.timeout = args.timeout
+            cmd_bridge_restart(common_args)
+        else:
+            cmd_bridge_start(common_args)
+        recovered = True
+    if not recovered and args.fail_if_idle:
+        raise SystemExit("no bridges required recovery")
+
+
 def cmd_supervise(args: argparse.Namespace) -> None:
     lock_path = _bridge_lock_path(args.home, args.agent)
     existing = _read_bridge_lock(lock_path)
@@ -2817,7 +2940,11 @@ def cmd_supervise(args: argparse.Namespace) -> None:
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
     while True:
-        output = _render_dashboard(args.home, args.inbox_path, args.claims_path, args.sessions_path)
+        output = (
+            _render_ops_dashboard(args.home, args.inbox_path, args.claims_path, args.sessions_path)
+            if args.view == "ops"
+            else _render_dashboard(args.home, args.inbox_path, args.claims_path, args.sessions_path)
+        )
         sys.stdout.write("\x1b[2J\x1b[H")
         sys.stdout.write(output + "\n")
         sys.stdout.flush()
@@ -2965,6 +3092,8 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--claim-scope-prefix", default="auto-", help="scope prefix used for auto-generated claims")
     auto_parser.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
     auto_parser.add_argument("--log-path", default="", help=argparse.SUPPRESS)
+    auto_parser.add_argument("--max-restarts", type=int, default=0, help=argparse.SUPPRESS)
+    auto_parser.add_argument("--cool-off-seconds", type=float, default=0.0, help=argparse.SUPPRESS)
     auto_parser.set_defaults(func=cmd_auto)
 
     supervise_parser = subparsers.add_parser("supervise", help=argparse.SUPPRESS)
@@ -3023,9 +3152,26 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_restart_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS, help="restart counting window for max-restarts")
     bridge_restart_parser.set_defaults(func=cmd_bridge_restart)
 
+    bridge_recover_parser = subparsers.add_parser("bridge-recover", help="restart paused or down supervised bridges using their last known settings")
+    bridge_recover_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_recover_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="fallback repo if a bridge has no saved repo")
+    bridge_recover_parser.add_argument("--interval", type=float, default=2.0)
+    bridge_recover_parser.add_argument("--claim-on-files", action="store_true")
+    bridge_recover_parser.add_argument("--claim-scope-prefix", default="auto-")
+    bridge_recover_parser.add_argument("--verbose", action="store_true")
+    bridge_recover_parser.add_argument("--timeout", type=float, default=3.0)
+    bridge_recover_parser.add_argument("--auto-sweep", action="store_true")
+    bridge_recover_parser.add_argument("--sweep-interval", type=float, default=30.0)
+    bridge_recover_parser.add_argument("--max-restarts", type=int, default=5)
+    bridge_recover_parser.add_argument("--cool-off-seconds", type=float, default=BRIDGE_COOL_OFF_SECONDS)
+    bridge_recover_parser.add_argument("--force", action="store_true", help="restart even if the bridge does not appear degraded")
+    bridge_recover_parser.add_argument("--fail-if-idle", action="store_true", help="exit non-zero when no bridges needed recovery")
+    bridge_recover_parser.set_defaults(func=cmd_bridge_recover)
+
     dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")
     dashboard_parser.add_argument("--interval", type=float, default=2.0)
     dashboard_parser.add_argument("--once", action="store_true")
+    dashboard_parser.add_argument("--view", choices=["full", "ops"], default="full")
     dashboard_parser.set_defaults(func=cmd_dashboard)
 
     read_parser = subparsers.add_parser("read", help="read recent agent messages")

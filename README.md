@@ -114,6 +114,7 @@ Open the live terminal dashboard:
 
 ```bash
 agentcodehandoff-dashboard
+agentcodehandoff dashboard --view ops
 ```
 
 Send a handoff:
@@ -250,6 +251,12 @@ Let supervised bridges recover their own stale requests automatically:
 
 ```bash
 agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep --sweep-interval 30 --max-restarts 5
+```
+
+Recover paused or down bridges with one command:
+
+```bash
+agentcodehandoff bridge-recover
 ```
 
 Apply a safe remediation automatically:
