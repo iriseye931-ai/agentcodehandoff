@@ -226,6 +226,12 @@ Get actionable scope suggestions:
 agentcodehandoff suggest
 ```
 
+Inspect request lifecycle state:
+
+```bash
+agentcodehandoff requests
+```
+
 Apply a safe remediation automatically:
 
 ```bash
@@ -255,6 +261,7 @@ agentcodehandoff claims
 agentcodehandoff sessions
 agentcodehandoff drift
 agentcodehandoff suggest
+agentcodehandoff requests
 agentcodehandoff remediate --agent codex --scope parser-pass
 agentcodehandoff bridge-status
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
@@ -280,6 +287,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-sessions`
 - `agentcodehandoff-drift`
 - `agentcodehandoff-suggest`
+- `agentcodehandoff-requests`
 - `agentcodehandoff-remediate`
 - `agentcodehandoff-bridge-status`
 - `agentcodehandoff-codex-watch`
@@ -331,6 +339,7 @@ It shows:
 - actionable suggestions for expand, split, or handoff decisions
 - safe remediation helpers for claim expansion and handoff generation
 - split-work remediation that can create a new claim and optional session
+- request lifecycle tracking with pending, acknowledged, stale, and outcome states
 
 ## Worktree Sessions
 

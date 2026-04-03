@@ -29,6 +29,7 @@ TERMINAL_FALLBACK_SIZE = (120, 40)
 BRIDGE_HEARTBEAT_SECONDS = 10
 BRIDGE_RESTART_BASE_DELAY = 2.0
 BRIDGE_RESTART_MAX_DELAY = 30.0
+REQUEST_STALE_SECONDS = 300
 
 
 def _now_iso() -> str:
@@ -252,8 +253,68 @@ def _send_record(
             "summary": summary,
             "details": details,
             "files": normalized_files,
+            "request_id": "",
         },
     )
+
+
+def _request_age_seconds(timestamp: str) -> float | None:
+    dt = _parse_iso(timestamp)
+    if dt is None:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
+
+
+def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    requests = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"request", "task", "auto-request"}
+    ]
+    outcomes = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"done", "blocked", "review"}
+    ]
+    handoffs = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() == "handoff"
+    ]
+    records: list[dict[str, Any]] = []
+    for request in requests:
+        request_id = str(request.get("id", "")).strip()
+        request_to = str(request.get("to", "")).strip().lower()
+        related_outcomes = [
+            item for item in outcomes
+            if str(item.get("from", "")).strip().lower() == request_to
+            and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
+            and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+        ]
+        related_handoffs = [
+            item for item in handoffs
+            if str(item.get("from", "")).strip().lower() == request_to
+            and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
+            and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+        ]
+        latest_outcome = related_outcomes[-1] if related_outcomes else None
+        latest_handoff = related_handoffs[-1] if related_handoffs else None
+        age_seconds = _request_age_seconds(str(request.get("timestamp", "")).strip())
+        state = "pending"
+        if latest_outcome is not None:
+            state = str(latest_outcome.get("role", "pending")).strip().lower() or "pending"
+        elif latest_handoff is not None:
+            state = "acknowledged"
+        elif age_seconds is not None and age_seconds >= REQUEST_STALE_SECONDS:
+            state = "stale"
+        records.append(
+            {
+                "request": request,
+                "request_id": request_id,
+                "state": state,
+                "age_seconds": age_seconds,
+                "latest_outcome": latest_outcome,
+                "latest_handoff": latest_handoff,
+            }
+        )
+    return records
 
 
 def _pending_messages_for_agent(messages: list[dict[str, Any]], agent: str, seen_ids: set[str]) -> list[dict[str, Any]]:
@@ -799,6 +860,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff auto-status "$@"\n'
     elif kind == "status":
         command = 'exec agentcodehandoff status "$@"\n'
+    elif kind == "requests":
+        command = 'exec agentcodehandoff requests "$@"\n'
     elif kind == "sessions":
         command = 'exec agentcodehandoff sessions "$@"\n'
     elif kind == "drift":
@@ -878,7 +941,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "sessions", "drift", "suggest", "remediate", "bridge-status"):
+    for kind in ("dashboard", "auto-status", "status", "requests", "sessions", "drift", "suggest", "remediate", "bridge-status"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1172,6 +1235,19 @@ def _suggestion_lines(sessions: list[dict[str, Any]], claims: list[dict[str, Any
     return lines
 
 
+def _request_status_line(record: dict[str, Any], width: int) -> str:
+    request = record["request"]
+    state = str(record.get("state", "pending"))
+    summary = str(request.get("summary", "")).strip() or "(no summary)"
+    sender = str(request.get("from", "?")).strip() or "?"
+    recipient = str(request.get("to", "?")).strip() or "?"
+    age_seconds = record.get("age_seconds")
+    age_text = "?"
+    if isinstance(age_seconds, (int, float)):
+        age_text = f"{int(age_seconds)}s"
+    return _truncate(f"{sender}->{recipient} [{state}] {summary} ({age_text})", width)
+
+
 def _render_panel(title: str, rows: list[str], width: int, height: int | None = None) -> list[str]:
     inner_width = max(10, width - 4)
     top = f"+- {title} " + "-" * max(0, width - len(title) - 5) + "+"
@@ -1213,6 +1289,7 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     messages = _read_messages(inbox_path)
     claims = _read_claims(claims_path)
     sessions = _read_sessions(sessions_path)
+    request_records = _request_records(messages)
     latest_by_agent: dict[str, dict[str, Any]] = {}
     for message in messages:
         sender = str(message.get("from", "")).strip()
@@ -1269,28 +1346,32 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     )
     lines.append("")
 
-    conflict_rows = _conflict_lines(claims, left_width - 4, limit=4) or ["No claim conflicts"]
+    request_rows = [_request_status_line(record, left_width - 4) for record in request_records[-4:]] or ["No tracked requests"]
     session_rows = [_session_summary_line(session, right_width - 4) for session in active_sessions[-4:]] or ["No active sessions"]
     lines.extend(
         _merge_columns(
-            _render_panel("Conflicts", conflict_rows, left_width, height=8),
+            _render_panel("Requests", request_rows, left_width, height=8),
             _render_panel("Active Sessions", session_rows, right_width, height=8),
         )
     )
     lines.append("")
 
-    drift_rows = _drift_lines(sessions, claims, left_width - 4, limit=4) or ["No session drift"]
-    suggestion_rows = _suggestion_lines(sessions, claims, right_width - 4, limit=4) or ["No suggestions"]
+    conflict_rows = _conflict_lines(claims, left_width - 4, limit=4) or ["No claim conflicts"]
     lines.extend(
         _merge_columns(
-            _render_panel("File Awareness", drift_rows, left_width, height=8),
-            _render_panel("Suggestions", suggestion_rows, right_width, height=8),
+            _render_panel("Conflicts", conflict_rows, left_width, height=8),
+            _render_panel("Suggestions", _suggestion_lines(sessions, claims, right_width - 4, limit=4) or ["No suggestions"], right_width, height=8),
         )
     )
     lines.append("")
 
-    resolved_rows = [_claim_summary_line(claim, total_width - 4) for claim in resolved_claims] or ["No resolved claims"]
-    lines.extend(_render_panel("Recently Resolved", resolved_rows, total_width, height=8))
+    drift_rows = _drift_lines(sessions, claims, left_width - 4, limit=4) or ["No session drift"]
+    lines.extend(
+        _merge_columns(
+            _render_panel("File Awareness", drift_rows, left_width, height=8),
+            _render_panel("Recently Resolved", [_claim_summary_line(claim, right_width - 4) for claim in resolved_claims] or ["No resolved claims"], right_width, height=8),
+        )
+    )
     lines.append("")
 
     recent_rows: list[str] = []
@@ -1424,6 +1505,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     messages = _read_messages(args.inbox_path)
     claims = _read_claims(args.claims_path)
     sessions = _read_sessions(args.sessions_path)
+    request_records = _request_records(messages)
     latest_by_agent: dict[str, dict[str, Any]] = {}
     for message in messages:
         sender = str(message.get("from", "")).strip()
@@ -1443,6 +1525,21 @@ def cmd_status(args: argparse.Namespace) -> None:
     print()
     for agent in args.agents:
         _print_bridge_supervision(_supervised_bridge_status(args.home, args.inbox_path, agent))
+    print("Requests")
+    print()
+    if not request_records:
+        print("none")
+        print()
+    else:
+        for record in request_records[-args.requests_limit:]:
+            print(_request_status_line(record, 120))
+            outcome = record.get("latest_outcome")
+            if outcome:
+                print(f"  outcome: {outcome.get('role', '')} :: {outcome.get('summary', '')}")
+            elif record.get("latest_handoff"):
+                handoff = record["latest_handoff"]
+                print(f"  acknowledged: {handoff.get('summary', '')}")
+            print()
     print("Workflow updates")
     print()
     workflow_messages = [
@@ -1684,6 +1781,31 @@ def cmd_suggest(args: argparse.Namespace) -> None:
                 print(f"  action: {action}")
                 if detail:
                     print(f"    {detail}")
+        print()
+
+
+def cmd_requests(args: argparse.Namespace) -> None:
+    records = _request_records(_read_messages(args.inbox_path))
+    if args.agent:
+        needle = args.agent.lower()
+        records = [
+            record for record in records
+            if str(record["request"].get("from", "")).lower() == needle or str(record["request"].get("to", "")).lower() == needle
+        ]
+    records = records[-args.limit:]
+    if not records:
+        print("no requests")
+        return
+    for record in records:
+        print(_request_status_line(record, 120))
+        request = record["request"]
+        print(f"  task: {request.get('task', '')}")
+        outcome = record.get("latest_outcome")
+        if outcome:
+            print(f"  outcome: {outcome.get('role', '')} :: {outcome.get('summary', '')}")
+        elif record.get("latest_handoff"):
+            handoff = record["latest_handoff"]
+            print(f"  acknowledged: {handoff.get('summary', '')}")
         print()
 
 
@@ -2447,7 +2569,13 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--workflow-limit", type=int, default=6)
     status_parser.add_argument("--resolved-limit", type=int, default=5)
     status_parser.add_argument("--sessions-limit", type=int, default=5)
+    status_parser.add_argument("--requests-limit", type=int, default=6)
     status_parser.set_defaults(func=cmd_status)
+
+    requests_parser = subparsers.add_parser("requests", help="show request lifecycle state from message history")
+    requests_parser.add_argument("--agent", help="filter requests by from/to agent")
+    requests_parser.add_argument("--limit", type=int, default=20)
+    requests_parser.set_defaults(func=cmd_requests)
 
     send_parser = subparsers.add_parser("send", help="send an agent handoff")
     send_parser.add_argument("--from-agent", required=True)
