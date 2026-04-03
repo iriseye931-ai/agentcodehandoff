@@ -148,6 +148,51 @@ def _print_claim(claim: dict[str, Any]) -> None:
     print()
 
 
+def _open_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [claim for claim in claims if not claim.get("released")]
+
+
+def _claim_conflicts(existing_claims: list[dict[str, Any]], candidate: dict[str, Any]) -> list[dict[str, Any]]:
+    candidate_agent = str(candidate.get("agent", "")).lower()
+    candidate_scope = str(candidate.get("scope", "")).strip()
+    candidate_files = {str(item).strip() for item in candidate.get("files", []) if str(item).strip()}
+    conflicts: list[dict[str, Any]] = []
+
+    for claim in _open_claims(existing_claims):
+        existing_agent = str(claim.get("agent", "")).lower()
+        if existing_agent == candidate_agent:
+            continue
+        existing_scope = str(claim.get("scope", "")).strip()
+        existing_files = {str(item).strip() for item in claim.get("files", []) if str(item).strip()}
+        overlapping_files = sorted(candidate_files & existing_files)
+        same_scope = candidate_scope and existing_scope and candidate_scope == existing_scope
+        if overlapping_files or same_scope:
+            conflicts.append(
+                {
+                    "claim": claim,
+                    "overlapping_files": overlapping_files,
+                    "same_scope": same_scope,
+                }
+            )
+    return conflicts
+
+
+def _print_conflicts(conflicts: list[dict[str, Any]]) -> None:
+    if not conflicts:
+        return
+    print("conflicts:")
+    for conflict in conflicts:
+        claim = conflict["claim"]
+        print(
+            f"- {claim.get('agent', '?')} already claims {claim.get('scope', '') or '(no scope)'}"
+        )
+        if conflict["same_scope"]:
+            print("  same scope")
+        if conflict["overlapping_files"]:
+            print("  overlapping files:", ", ".join(conflict["overlapping_files"]))
+    print()
+
+
 def _wrapper_script(kind: str, agent: str) -> str:
     if kind == "watch":
         command = f'exec agentcodehandoff watch --agent "{agent}" "$@"\n'
@@ -256,9 +301,26 @@ def cmd_status(args: argparse.Namespace) -> None:
     if not open_claims:
         print("none")
         print()
-        return
-    for claim in open_claims:
-        _print_claim(claim)
+    else:
+        for claim in open_claims:
+            _print_claim(claim)
+
+    conflicts_found = False
+    for index, claim in enumerate(open_claims):
+        remaining = open_claims[:index] + open_claims[index + 1 :]
+        conflicts = _claim_conflicts(remaining, claim)
+        if conflicts:
+            if not conflicts_found:
+                print("Claim conflicts")
+                print()
+                conflicts_found = True
+            print(f"{claim.get('agent', '?')} -> {claim.get('scope', '') or '(no scope)'}")
+            _print_conflicts(conflicts)
+    if not conflicts_found:
+        print("Claim conflicts")
+        print()
+        print("none")
+        print()
 
 
 def cmd_claim(args: argparse.Namespace) -> None:
@@ -272,9 +334,13 @@ def cmd_claim(args: argparse.Namespace) -> None:
         "files": _split_files(args.files or ""),
         "released": False,
     }
+    conflicts = _claim_conflicts(claims, claim)
     claims.append(claim)
     _write_claims(args.claims_path, claims)
     _print_claim(claim)
+    if conflicts:
+        print("warning: this claim overlaps with existing open claims")
+        _print_conflicts(conflicts)
 
 
 def cmd_claims(args: argparse.Namespace) -> None:
