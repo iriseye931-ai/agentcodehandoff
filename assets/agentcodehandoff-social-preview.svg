@@ -1,0 +1,86 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="74" y1="42" x2="1188" y2="602" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07101C"/>
+      <stop offset="1" stop-color="#040913"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(904 166) rotate(146.333) scale(403.582 282.228)">
+      <stop stop-color="#0C203B"/>
+      <stop offset="1" stop-color="#0C203B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="frame" x1="160" y1="152" x2="480" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101C33"/>
+      <stop offset="1" stop-color="#091221"/>
+    </linearGradient>
+    <linearGradient id="link" x1="214" y1="188" x2="402" y2="392" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A6ECFF"/>
+      <stop offset="1" stop-color="#55B1FF"/>
+    </linearGradient>
+    <filter id="glow" x="102" y="102" width="408" height="408" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="#03070D"/>
+  <rect x="28" y="28" width="1224" height="584" rx="34" fill="url(#bg)"/>
+  <rect x="28" y="28" width="1224" height="584" rx="34" stroke="#17314D" stroke-width="2"/>
+  <circle cx="980" cy="144" r="260" fill="url(#halo)"/>
+
+  <g opacity="0.55">
+    <path d="M870 116H1174" stroke="#102035" stroke-width="2"/>
+    <path d="M870 514H1174" stroke="#102035" stroke-width="2"/>
+    <path d="M1008 78V562" stroke="#102035" stroke-width="2"/>
+  </g>
+
+  <g>
+    <rect x="146" y="146" width="320" height="320" rx="52" fill="url(#frame)" stroke="#29446B" stroke-width="2"/>
+    <path d="M126 190L152 164H252" stroke="#2C496F" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M360 164H460L486 190" stroke="#2C496F" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M126 422L152 448H252" stroke="#2C496F" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M360 448H460L486 422" stroke="#2C496F" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <path d="M306 196V416" stroke="#1A2E49" stroke-width="3"/>
+    <path d="M196 306H416" stroke="#1A2E49" stroke-width="3"/>
+    <circle cx="306" cy="306" r="98" stroke="#203655" stroke-width="3"/>
+
+    <g filter="url(#glow)">
+      <path d="M306 306L224 234" stroke="url(#link)" stroke-width="6" stroke-linecap="round"/>
+      <path d="M306 306L384 230" stroke="url(#link)" stroke-width="6" stroke-linecap="round"/>
+      <path d="M306 306L388 382" stroke="url(#link)" stroke-width="6" stroke-linecap="round"/>
+    </g>
+
+    <circle cx="306" cy="306" r="44" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="6"/>
+    <circle cx="306" cy="306" r="14" fill="#F1FBFF"/>
+    <circle cx="306" cy="306" r="58" stroke="#6BCBFF" stroke-opacity="0.35" stroke-width="3"/>
+
+    <circle cx="224" cy="234" r="28" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="4"/>
+    <circle cx="384" cy="230" r="28" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="4"/>
+    <circle cx="388" cy="382" r="28" fill="#0E1A2D" stroke="#8ADFFF" stroke-width="4"/>
+    <circle cx="224" cy="234" r="8" fill="#8ADFFF"/>
+    <circle cx="384" cy="230" r="8" fill="#8ADFFF"/>
+    <circle cx="388" cy="382" r="8" fill="#8ADFFF"/>
+  </g>
+
+  <g>
+    <text x="566" y="232" fill="#F4FBFF" font-family="SF Pro Display, Inter, Segoe UI, sans-serif" font-size="76" font-weight="700" letter-spacing="0.02em">
+      AgentCodeHandoff
+    </text>
+    <text x="568" y="284" fill="#8ADFFF" font-family="SF Pro Display, Inter, Segoe UI, sans-serif" font-size="23" font-weight="700" letter-spacing="0.18em">
+      LOCAL CONTROL PLANE FOR CODING AGENTS
+    </text>
+    <text x="568" y="352" fill="#D8E6F5" font-family="SF Pro Text, Inter, Segoe UI, sans-serif" font-size="28" font-weight="500">
+      Shared handoffs. Supervised bridges. Smart routing.
+    </text>
+    <text x="568" y="394" fill="#D8E6F5" font-family="SF Pro Text, Inter, Segoe UI, sans-serif" font-size="28" font-weight="500">
+      Drift remediation. Request lifecycle. Trio operations.
+    </text>
+    <rect x="568" y="448" width="426" height="56" rx="14" fill="#0B1627" stroke="#25456D" stroke-width="2"/>
+    <text x="596" y="484" fill="#AEEBFF" font-family="SF Mono, ui-monospace, monospace" font-size="23" font-weight="600">
+      codex • claude • hermes • terminal-first
+    </text>
+  </g>
+</svg>

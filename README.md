@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="assets/agentcodehandoff-mark.svg" alt="AgentCodeHandoff" width="96" height="96" />
+  <img src="assets/agentcodehandoff-lockup.svg" alt="AgentCodeHandoff" width="760" />
 </p>
-
-<h1 align="center">AgentCodeHandoff</h1>
 
 <p align="center"><strong>Local control plane for coding agents.</strong></p>
 
