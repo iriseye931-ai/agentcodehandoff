@@ -43,6 +43,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - Git worktree-backed agent sessions for isolated edit space
 - File-awareness checks that compare live session edits to claimed files
 - Supervised bridge lifecycle commands with pid, heartbeat, and pending request visibility
+- Automatic timeout recovery with reminders, reroutes, and escalation when safe recovery is exhausted
 - Terminal-first workflow for two or more agents in one repo
 - Paneled terminal dashboard for bridge health, workflow, claims, conflicts, and recent messages
 - Local-first state with no daemon required
@@ -230,6 +231,13 @@ Inspect request lifecycle state:
 
 ```bash
 agentcodehandoff requests
+```
+
+Approve or close a tracked request explicitly:
+
+```bash
+agentcodehandoff request-approve --request-id msg-123
+agentcodehandoff request-close --request-id msg-123
 ```
 
 Sweep stale requests and apply timeout actions:

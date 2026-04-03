@@ -30,6 +30,8 @@ BRIDGE_HEARTBEAT_SECONDS = 10
 BRIDGE_RESTART_BASE_DELAY = 2.0
 BRIDGE_RESTART_MAX_DELAY = 30.0
 REQUEST_STALE_SECONDS = 300
+REQUEST_ESCALATE_SECONDS = 900
+BRIDGE_EVENT_HISTORY = 8
 
 
 def _now_iso() -> str:
@@ -140,6 +142,23 @@ def _read_bridge_lock(path: Path) -> dict[str, Any]:
 def _write_bridge_lock(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _append_bridge_event(path: Path, event_type: str, summary: str, *, detail: str = "") -> None:
+    payload = _read_bridge_lock(path)
+    history = payload.get("recent_events", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            "timestamp": _now_iso(),
+            "type": event_type,
+            "summary": summary,
+            "detail": detail,
+        }
+    )
+    payload["recent_events"] = history[-BRIDGE_EVENT_HISTORY:]
+    _write_bridge_lock(path, payload)
 
 
 def _remove_bridge_lock(path: Path) -> None:
@@ -282,7 +301,7 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
     outcomes = [
         message for message in messages
-        if str(message.get("role", "")).strip().lower() in {"done", "blocked", "review"}
+        if str(message.get("role", "")).strip().lower() in {"done", "blocked", "review", "approved", "closed", "escalated"}
     ]
     handoffs = [
         message for message in messages
@@ -336,6 +355,29 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def _request_record_by_id(records: list[dict[str, Any]], request_id: str) -> dict[str, Any] | None:
+    needle = request_id.strip()
+    for record in records:
+        if str(record.get("request_id", "")).strip() == needle:
+            return record
+    return None
+
+
+def _pending_age_buckets(messages: list[dict[str, Any]]) -> dict[str, int]:
+    buckets = {"fresh": 0, "warm": 0, "stale": 0}
+    for message in messages:
+        age_seconds = _request_age_seconds(str(message.get("timestamp", "")).strip())
+        if age_seconds is None:
+            buckets["fresh"] += 1
+        elif age_seconds >= REQUEST_STALE_SECONDS:
+            buckets["stale"] += 1
+        elif age_seconds >= 30:
+            buckets["warm"] += 1
+        else:
+            buckets["fresh"] += 1
+    return buckets
 
 
 def _pending_messages_for_agent(messages: list[dict[str, Any]], agent: str, seen_ids: set[str]) -> list[dict[str, Any]]:
@@ -895,6 +937,12 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff remediate "$@"\n'
     elif kind == "bridge-status":
         command = 'exec agentcodehandoff bridge-status "$@"\n'
+    elif kind == "request-approve":
+        command = 'exec agentcodehandoff request-approve "$@"\n'
+    elif kind == "request-close":
+        command = 'exec agentcodehandoff request-close "$@"\n'
+    elif kind == "request-escalate":
+        command = 'exec agentcodehandoff request-escalate "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -964,7 +1012,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status"):
+    for kind in ("dashboard", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "request-approve", "request-close", "request-escalate"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1098,6 +1146,7 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         valid_times = [item for item in timestamps if item is not None]
         if valid_times:
             oldest_pending_at = min(valid_times).isoformat()
+    pending_buckets = _pending_age_buckets(pending)
     return {
         "agent": agent,
         "pid": pid,
@@ -1106,6 +1155,7 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "healthy": healthy,
         "lock": lock,
         "pending_count": len(pending),
+        "pending_buckets": pending_buckets,
         "oldest_pending_at": oldest_pending_at,
         "automation_state": automation_state,
         "failure_class": str(lock.get("failure_class", "")).strip(),
@@ -1113,6 +1163,9 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "auto_sweep": bool(lock.get("auto_sweep", False)),
         "sweep_interval": float(lock.get("sweep_interval", 0.0) or 0.0),
         "last_sweep_at": str(lock.get("last_sweep_at", "")).strip(),
+        "last_exit_at": str(lock.get("last_exit_at", "")).strip(),
+        "last_exit_code": lock.get("last_exit_code", ""),
+        "recent_events": lock.get("recent_events", []),
     }
 
 
@@ -1123,13 +1176,15 @@ def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     healthy = bool(status.get("healthy"))
     paused = bool(status.get("lock", {}).get("paused", False)) if isinstance(status.get("lock"), dict) else False
     pending_count = int(status.get("pending_count", 0) or 0)
+    pending_buckets = status.get("pending_buckets", {}) if isinstance(status.get("pending_buckets"), dict) else {}
     restart_count = int(status.get("restart_count", 0) or 0)
     auto_sweep = bool(status.get("auto_sweep"))
     heartbeat = _parse_iso(str(status.get("lock", {}).get("last_heartbeat_at", "")).strip()) if isinstance(status.get("lock"), dict) else None
     heartbeat_text = _format_timestamp(heartbeat.isoformat()) if heartbeat else "--:--:--"
     state = "healthy" if healthy else "paused" if paused else "down"
     sweep_text = " | sweep" if auto_sweep else ""
-    return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} | hb {heartbeat_text} | restarts {restart_count}{sweep_text}", width)
+    bucket_text = f"f{int(pending_buckets.get('fresh', 0) or 0)}/w{int(pending_buckets.get('warm', 0) or 0)}/s{int(pending_buckets.get('stale', 0) or 0)}"
+    return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} ({bucket_text}) | hb {heartbeat_text} | restarts {restart_count}{sweep_text}", width)
 
 
 def _bridge_command_args(args: argparse.Namespace, agent: str) -> list[str]:
@@ -1211,6 +1266,13 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     oldest_pending_at = str(status.get("oldest_pending_at", "")).strip()
     if oldest_pending_at:
         print(f"  oldest pending: {_format_timestamp(oldest_pending_at)}")
+    pending_buckets = status.get("pending_buckets", {}) if isinstance(status.get("pending_buckets"), dict) else {}
+    print(
+        "  pending buckets:"
+        f" fresh={int(pending_buckets.get('fresh', 0) or 0)}"
+        f" warm={int(pending_buckets.get('warm', 0) or 0)}"
+        f" stale={int(pending_buckets.get('stale', 0) or 0)}"
+    )
     last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
     if last_error:
         print(f"  last error: {last_error}")
@@ -1222,6 +1284,20 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
         last_sweep_at = str(status.get("last_sweep_at", "")).strip()
         if last_sweep_at:
             print(f"  last sweep: {_format_timestamp(last_sweep_at)}")
+    last_exit_at = str(status.get("last_exit_at", "")).strip()
+    if last_exit_at:
+        print(f"  last exit: {_format_timestamp(last_exit_at)} code={status.get('last_exit_code', '')}")
+    recent_events = status.get("recent_events", [])
+    if isinstance(recent_events, list) and recent_events:
+        print("  recent events:")
+        for event in recent_events[-3:]:
+            summary = str(event.get("summary", "")).strip()
+            detail = str(event.get("detail", "")).strip()
+            when = _format_timestamp(str(event.get("timestamp", "")).strip())
+            line = f"    [{when}] {event.get('type', '')}: {summary}"
+            print(line)
+            if detail:
+                print(f"      {detail}")
     print()
 
 
@@ -1272,6 +1348,41 @@ def _suggestion_lines(sessions: list[dict[str, Any]], claims: list[dict[str, Any
     return lines
 
 
+def _supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) -> list[str]:
+    lines: list[str] = []
+    for agent in ("codex", "hermes"):
+        status = _supervised_bridge_status(home, inbox_path, agent)
+        lines.append(_bridge_supervision_line(status, width))
+        buckets = status.get("pending_buckets", {}) if isinstance(status.get("pending_buckets"), dict) else {}
+        lines.append(
+            _truncate(
+                f"  buckets fresh={int(buckets.get('fresh', 0) or 0)} warm={int(buckets.get('warm', 0) or 0)} stale={int(buckets.get('stale', 0) or 0)}",
+                width,
+            )
+        )
+        failure_class = str(status.get("failure_class", "")).strip()
+        last_exit_at = str(status.get("last_exit_at", "")).strip()
+        if failure_class or last_exit_at:
+            fail_line = f"  last exit={status.get('last_exit_code', '') or '-'}"
+            if last_exit_at:
+                fail_line += f" at {_format_timestamp(last_exit_at)}"
+            if failure_class:
+                fail_line += f" failure={failure_class}"
+            lines.append(_truncate(fail_line, width))
+        recent_events = status.get("recent_events", [])
+        if isinstance(recent_events, list) and recent_events:
+            event = recent_events[-1]
+            lines.append(
+                _truncate(
+                    f"  event [{_format_timestamp(str(event.get('timestamp', '')).strip())}] {event.get('type', '')}: {event.get('summary', '')}",
+                    width,
+                )
+            )
+        if len(lines) >= limit:
+            break
+    return lines[:limit]
+
+
 def _request_status_line(record: dict[str, Any], width: int) -> str:
     request = record["request"]
     state = str(record.get("state", "pending"))
@@ -1288,14 +1399,25 @@ def _request_status_line(record: dict[str, Any], width: int) -> str:
 def _stale_request_actions(record: dict[str, Any]) -> list[dict[str, Any]]:
     request = record["request"]
     state = str(record.get("state", "pending"))
+    age_seconds = record.get("age_seconds")
+    request_summary = str(request.get("summary", "")).strip()
+    request_from = str(request.get("from", "")).strip()
     if state not in {"stale", "acknowledged"}:
         return []
     if state == "acknowledged":
+        if isinstance(age_seconds, (int, float)) and age_seconds >= REQUEST_ESCALATE_SECONDS and _request_has_followup(record, "remind"):
+            return [
+                {
+                    "type": "escalate",
+                    "to_agent": request_from,
+                    "message": f"Escalate acknowledged request `{request_summary}` back to {request_from} for human review.",
+                }
+            ]
         return [
             {
                 "type": "remind",
                 "to_agent": str(request.get("to", "")).strip(),
-                "message": f"Follow up with {request.get('to', '')} on acknowledged request `{request.get('summary', '')}`.",
+                "message": f"Follow up with {request.get('to', '')} on acknowledged request `{request_summary}`.",
             }
         ]
     files = [str(item) for item in request.get("files", []) if str(item).strip()]
@@ -1306,6 +1428,14 @@ def _stale_request_actions(record: dict[str, Any]) -> list[dict[str, Any]]:
     target, _ = _recommend_agent(summary, details, files)
     if target.lower() == original_to.lower():
         target = "hermes" if original_to.lower() == "codex" else "codex"
+    if isinstance(age_seconds, (int, float)) and age_seconds >= REQUEST_ESCALATE_SECONDS and _request_has_followup(record, "reroute"):
+        return [
+            {
+                "type": "escalate",
+                "to_agent": request_from,
+                "message": f"Escalate stale request `{request_summary}` after automatic reroute failed to resolve it.",
+            }
+        ]
     return [
         {
             "type": "reroute",
@@ -1378,6 +1508,19 @@ def _apply_request_timeout_actions(
                 derived_from_request_id=request_id,
             )
             lines.append(f"  rerouted to {action.get('to_agent', '')}")
+        elif action_type == "escalate":
+            _send_record(
+                inbox_path,
+                from_agent=str(request.get("from", "")).strip() or "system",
+                to_agent=str(action.get("to_agent", "")).strip() or str(request.get("from", "")).strip() or "operator",
+                role="escalated",
+                task=str(request.get("task", "")).strip() or "request escalation",
+                summary=f"Escalated: {request.get('summary', '')}",
+                details="Automatic recovery exhausted safe actions; human review is recommended.",
+                files=request.get("files", []),
+                request_id=request_id,
+            )
+            lines.append(f"  escalated to {action.get('to_agent', '') or request.get('from', '')}")
         lines.append("")
     return lines
 
@@ -1465,7 +1608,7 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
 
     workflow_messages = [
         message for message in messages
-        if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review"}
+        if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review", "approved", "closed", "escalated"}
     ][-RECENT_WORKFLOW_MESSAGES:]
     open_claims = _open_claims(claims)
     active_sessions = _active_sessions(sessions)
@@ -1481,11 +1624,11 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     lines.append("")
 
     request_rows = [_request_status_line(record, left_width - 4) for record in request_records[-4:]] or ["No tracked requests"]
-    session_rows = [_session_summary_line(session, right_width - 4) for session in active_sessions[-4:]] or ["No active sessions"]
+    supervision_rows = _supervision_rows(home, inbox_path, right_width - 4, limit=8) or ["No supervision data"]
     lines.extend(
         _merge_columns(
             _render_panel("Requests", request_rows, left_width, height=8),
-            _render_panel("Active Sessions", session_rows, right_width, height=8),
+            _render_panel("Supervision", supervision_rows, right_width, height=8),
         )
     )
     lines.append("")
@@ -1500,11 +1643,17 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     lines.append("")
 
     drift_rows = _drift_lines(sessions, claims, left_width - 4, limit=4) or ["No session drift"]
+    session_rows = [_session_summary_line(session, right_width - 4) for session in active_sessions[-4:]] or ["No active sessions"]
     lines.extend(
         _merge_columns(
             _render_panel("File Awareness", drift_rows, left_width, height=8),
-            _render_panel("Recently Resolved", [_claim_summary_line(claim, right_width - 4) for claim in resolved_claims] or ["No resolved claims"], right_width, height=8),
+            _render_panel("Active Sessions", session_rows, right_width, height=8),
         )
+    )
+    lines.append("")
+
+    lines.extend(
+        _render_panel("Recently Resolved", [_claim_summary_line(claim, total_width - 4) for claim in resolved_claims] or ["No resolved claims"], total_width, height=7)
     )
     lines.append("")
 
@@ -1546,6 +1695,7 @@ def cmd_send(args: argparse.Namespace) -> None:
         summary=args.summary,
         details=args.details,
         files=args.files,
+        request_id=getattr(args, "request_id", ""),
     )
     _print_message(record)
 
@@ -1560,6 +1710,7 @@ def cmd_request(args: argparse.Namespace) -> None:
         summary=args.summary,
         details=args.details,
         files=args.files,
+        request_id=getattr(args, "request_id", ""),
     )
     _print_message(record)
 
@@ -1574,8 +1725,35 @@ def _cmd_workflow_message(args: argparse.Namespace) -> None:
         summary=args.summary,
         details=args.details,
         files=args.files,
+        request_id=getattr(args, "request_id", ""),
     )
     _print_message(record)
+
+
+def _cmd_request_action(args: argparse.Namespace) -> None:
+    records = _request_records(_read_messages(args.inbox_path))
+    record = _request_record_by_id(records, args.request_id)
+    if not record:
+        raise SystemExit(f"no request found for id {args.request_id}")
+    request = record["request"]
+    from_agent = args.from_agent or str(request.get("to", "")).strip() or "system"
+    to_agent = args.to_agent or str(request.get("from", "")).strip() or "system"
+    role = str(args.role).strip().lower()
+    summary = args.summary or f"{role.title()}: {request.get('summary', '')}"
+    details = args.details or f"{role.title()} request outcome for `{request.get('summary', '')}`."
+    task = args.task or str(request.get("task", "")).strip() or "request outcome"
+    outcome = _send_record(
+        args.inbox_path,
+        from_agent=from_agent,
+        to_agent=to_agent,
+        role=role,
+        task=task,
+        summary=summary,
+        details=details,
+        files=request.get("files", []),
+        request_id=str(record.get("request_id", "")).strip(),
+    )
+    _print_message(outcome)
 
 
 def cmd_route(args: argparse.Namespace) -> None:
@@ -1667,18 +1845,22 @@ def cmd_status(args: argparse.Namespace) -> None:
     else:
         for record in request_records[-args.requests_limit:]:
             print(_request_status_line(record, 120))
+            print(f"  request_id: {record.get('request_id', '')}")
             outcome = record.get("latest_outcome")
             if outcome:
                 print(f"  outcome: {outcome.get('role', '')} :: {outcome.get('summary', '')}")
             elif record.get("latest_handoff"):
                 handoff = record["latest_handoff"]
                 print(f"  acknowledged: {handoff.get('summary', '')}")
+            followups = record.get("followups", [])
+            if followups:
+                print(f"  followups: {len(followups)}")
             print()
     print("Workflow updates")
     print()
     workflow_messages = [
         message for message in messages
-        if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review"}
+        if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review", "approved", "closed", "escalated"}
     ][-args.workflow_limit:]
     if not workflow_messages:
         print("none")
@@ -1933,6 +2115,7 @@ def cmd_requests(args: argparse.Namespace) -> None:
     for record in records:
         print(_request_status_line(record, 120))
         request = record["request"]
+        print(f"  request_id: {record.get('request_id', '')}")
         print(f"  task: {request.get('task', '')}")
         outcome = record.get("latest_outcome")
         if outcome:
@@ -1940,6 +2123,9 @@ def cmd_requests(args: argparse.Namespace) -> None:
         elif record.get("latest_handoff"):
             handoff = record["latest_handoff"]
             print(f"  acknowledged: {handoff.get('summary', '')}")
+        followups = record.get("followups", [])
+        if followups:
+            print(f"  followups: {len(followups)}")
         print()
 
 
@@ -2186,6 +2372,7 @@ def cmd_auto(args: argparse.Namespace) -> None:
             "restart_count": int(existing.get("restart_count", 0) or 0),
             "backoff_seconds": float(existing.get("backoff_seconds", 0.0) or 0.0),
             "failure_class": str(existing.get("failure_class", "")).strip(),
+            "recent_events": existing.get("recent_events", []),
         }
         _write_bridge_lock(lock_path, payload)
 
@@ -2316,8 +2503,24 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
         text=True,
     )
     log_handle.close()
+    lock_path = _bridge_lock_path(args.home, args.agent)
+    existing = _read_bridge_lock(lock_path)
+    history = existing.get("recent_events", [])
+    if not isinstance(history, list):
+        history = []
+    pending_event = getattr(args, "pending_event", None)
+    if isinstance(pending_event, dict):
+        history.append(pending_event)
+    history.append(
+        {
+            "timestamp": _now_iso(),
+            "type": "start",
+            "summary": f"Started supervised bridge for {args.agent}",
+            "detail": f"supervisor pid {process.pid}",
+        }
+    )
     _write_bridge_lock(
-        _bridge_lock_path(args.home, args.agent),
+        lock_path,
         {
             "agent": args.agent,
             "pid": 0,
@@ -2335,6 +2538,7 @@ def cmd_bridge_start(args: argparse.Namespace) -> None:
             "auto_sweep": bool(args.auto_sweep),
             "sweep_interval": float(args.sweep_interval),
             "last_sweep_at": "",
+            "recent_events": history[-BRIDGE_EVENT_HISTORY:],
         },
     )
     print(f"started {args.agent} bridge")
@@ -2353,6 +2557,7 @@ def cmd_bridge_stop(args: argparse.Namespace) -> None:
         _remove_bridge_lock(lock_path)
         print("bridge process was not running; removed stale lock")
         return
+    _append_bridge_event(lock_path, "stop", f"Stopping supervised bridge for {args.agent}", detail=f"pid {pid}")
     _signal_pid(pid, signal.SIGTERM)
     deadline = time.time() + args.timeout
     while time.time() < deadline:
@@ -2371,6 +2576,12 @@ def cmd_bridge_stop(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_restart(args: argparse.Namespace) -> None:
+    restart_event = {
+        "timestamp": _now_iso(),
+        "type": "restart",
+        "summary": f"Restart requested for {args.agent}",
+        "detail": "",
+    }
     stop_args = argparse.Namespace(
         home=args.home,
         agent=args.agent,
@@ -2391,6 +2602,7 @@ def cmd_bridge_restart(args: argparse.Namespace) -> None:
         verbose=args.verbose,
         auto_sweep=args.auto_sweep,
         sweep_interval=args.sweep_interval,
+        pending_event=restart_event,
     )
     cmd_bridge_start(start_args)
 
@@ -2436,6 +2648,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 }
             )
             _write_bridge_lock(lock_path, current)
+            _append_bridge_event(lock_path, "startup-failed", f"Supervisor could not start {args.agent}", detail=str(exc)[:240])
             return
 
         _write_bridge_lock(
@@ -2457,8 +2670,10 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 "auto_sweep": bool(args.auto_sweep),
                 "sweep_interval": float(args.sweep_interval),
                 "last_sweep_at": str(existing.get("last_sweep_at", "")).strip(),
+                "recent_events": existing.get("recent_events", []),
             },
         )
+        _append_bridge_event(lock_path, "child-start", f"Bridge child started for {args.agent}", detail=f"pid {process.pid}")
         last_sweep_monotonic = time.monotonic()
         while True:
             return_code = process.poll()
@@ -2466,7 +2681,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 break
             if args.auto_sweep and args.sweep_interval > 0 and (time.monotonic() - last_sweep_monotonic) >= args.sweep_interval:
                 records = _request_records(_read_messages(args.inbox_path))
-                _apply_request_timeout_actions(
+                sweep_lines = _apply_request_timeout_actions(
                     args.inbox_path,
                     records,
                     owner_agent=args.agent,
@@ -2483,6 +2698,8 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                     }
                 )
                 _write_bridge_lock(lock_path, current)
+                if sweep_lines:
+                    _append_bridge_event(lock_path, "sweep", f"Automatic sweep applied {max(1, len(sweep_lines) // 3)} action(s)", detail=sweep_lines[0])
                 last_sweep_monotonic = time.monotonic()
             time.sleep(min(1.0, max(0.2, args.interval)))
 
@@ -2503,6 +2720,7 @@ def cmd_supervise(args: argparse.Namespace) -> None:
                 }
             )
             _write_bridge_lock(lock_path, current)
+            _append_bridge_event(lock_path, "child-exit", f"{args.agent} bridge exited cleanly", detail=f"exit code {return_code}")
             return
 
         restart_count += 1
@@ -2523,9 +2741,11 @@ def cmd_supervise(args: argparse.Namespace) -> None:
             }
         )
         _write_bridge_lock(lock_path, current)
+        _append_bridge_event(lock_path, "child-exit", f"{args.agent} bridge exited", detail=f"exit {return_code} failure={failure_class or 'none'} restart={restart_count}")
         if hard_failure and not args.always_restart:
             if args.verbose:
                 print(f"{args.agent} bridge entered paused state due to hard failure: {failure_class}", file=sys.stderr)
+            _append_bridge_event(lock_path, "paused", f"{args.agent} bridge paused", detail=f"hard failure {failure_class}")
             return
         if args.verbose:
             print(f"{args.agent} bridge exited with {return_code}; restarting in {backoff:.1f}s", file=sys.stderr)
@@ -2782,6 +3002,7 @@ def build_parser() -> argparse.ArgumentParser:
     send_parser.add_argument("--task", default="shared task")
     send_parser.add_argument("--role", default="handoff")
     send_parser.add_argument("--files", default="", help="comma-separated file list")
+    send_parser.add_argument("--request-id", default="", help="optional request id this handoff relates to")
     send_parser.set_defaults(func=cmd_send)
 
     request_parser = subparsers.add_parser("request", help="send a message that auto bridges will respond to")
@@ -2792,6 +3013,7 @@ def build_parser() -> argparse.ArgumentParser:
     request_parser.add_argument("--task", default="shared task")
     request_parser.add_argument("--role", default="request")
     request_parser.add_argument("--files", default="", help="comma-separated file list")
+    request_parser.add_argument("--request-id", default="", help="optional request id to preserve across retries")
     request_parser.set_defaults(func=cmd_request)
 
     done_parser = subparsers.add_parser("done", help="send a completion update to another agent")
@@ -2802,6 +3024,7 @@ def build_parser() -> argparse.ArgumentParser:
     done_parser.add_argument("--task", default="completed work")
     done_parser.add_argument("--role", default="done")
     done_parser.add_argument("--files", default="", help="comma-separated file list")
+    done_parser.add_argument("--request-id", default="", help="optional request id this update resolves")
     done_parser.set_defaults(func=_cmd_workflow_message)
 
     blocked_parser = subparsers.add_parser("blocked", help="send a blocked update to another agent")
@@ -2812,6 +3035,7 @@ def build_parser() -> argparse.ArgumentParser:
     blocked_parser.add_argument("--task", default="blocked work")
     blocked_parser.add_argument("--role", default="blocked")
     blocked_parser.add_argument("--files", default="", help="comma-separated file list")
+    blocked_parser.add_argument("--request-id", default="", help="optional request id this update resolves")
     blocked_parser.set_defaults(func=_cmd_workflow_message)
 
     review_parser = subparsers.add_parser("review", help="send a review-request update to another agent")
@@ -2822,7 +3046,22 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--task", default="review request")
     review_parser.add_argument("--role", default="review")
     review_parser.add_argument("--files", default="", help="comma-separated file list")
+    review_parser.add_argument("--request-id", default="", help="optional request id this update resolves")
     review_parser.set_defaults(func=_cmd_workflow_message)
+
+    for command_name, role_name, help_text in (
+        ("request-approve", "approved", "approve a tracked request by id"),
+        ("request-close", "closed", "close a tracked request by id"),
+        ("request-escalate", "escalated", "escalate a tracked request by id"),
+    ):
+        action_parser = subparsers.add_parser(command_name, help=help_text)
+        action_parser.add_argument("--request-id", required=True)
+        action_parser.add_argument("--from-agent", default="", help="defaults to the request assignee")
+        action_parser.add_argument("--to-agent", default="", help="defaults to the original requester")
+        action_parser.add_argument("--summary", default="", help="optional override summary")
+        action_parser.add_argument("--details", default="", help="optional override details")
+        action_parser.add_argument("--task", default="", help="optional override task")
+        action_parser.set_defaults(func=_cmd_request_action, role=role_name)
 
     route_parser = subparsers.add_parser("route", help="recommend Codex or Hermes for a request")
     route_parser.add_argument("--summary", required=True)
