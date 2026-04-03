@@ -427,6 +427,62 @@ def _git_current_branch(repo: Path) -> str:
     return _git_output(repo, ["branch", "--show-current"]) or "main"
 
 
+def _git_changed_files(repo: Path) -> list[str]:
+    result = _run_git(repo, ["status", "--porcelain"])
+    if result.returncode != 0:
+        return []
+    changed: list[str] = []
+    for line in (result.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        path_part = line[3:] if len(line) > 3 else ""
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1]
+        normalized = path_part.strip()
+        if normalized:
+            changed.append(normalized)
+    return changed
+
+
+def _linked_claim_for_session(session: dict[str, Any], claims: list[dict[str, Any]]) -> dict[str, Any] | None:
+    explicit_scope = str(session.get("claim_scope", "")).strip()
+    session_agent = str(session.get("agent", "")).strip().lower()
+    session_scope = str(session.get("scope", "")).strip()
+    for claim in claims:
+        if str(claim.get("agent", "")).strip().lower() != session_agent:
+            continue
+        claim_scope = str(claim.get("scope", "")).strip()
+        if explicit_scope and claim_scope == explicit_scope:
+            return claim
+        if not explicit_scope and claim_scope == session_scope:
+            return claim
+    return None
+
+
+def _session_drift(session: dict[str, Any], claims: list[dict[str, Any]]) -> dict[str, Any]:
+    worktree_path = Path(str(session.get("worktree_path", "")))
+    if not worktree_path.exists():
+        return {"status": "missing", "changed_files": [], "unexpected_files": [], "claim": _linked_claim_for_session(session, claims)}
+    changed_files = _git_changed_files(worktree_path)
+    claim = _linked_claim_for_session(session, claims)
+    declared_files = {str(item).strip() for item in (claim.get("files", []) if claim else []) if str(item).strip()}
+    unexpected = sorted(file for file in changed_files if declared_files and file not in declared_files)
+    if not changed_files:
+        status = "clean"
+    elif not declared_files:
+        status = "unscoped"
+    elif unexpected:
+        status = "drift"
+    else:
+        status = "aligned"
+    return {
+        "status": status,
+        "changed_files": changed_files,
+        "unexpected_files": unexpected,
+        "claim": claim,
+    }
+
+
 def _filter_messages(messages: list[dict[str, Any]], agent: str | None, limit: int) -> list[dict[str, Any]]:
     if agent:
         needle = agent.strip().lower()
@@ -534,6 +590,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff status "$@"\n'
     elif kind == "sessions":
         command = 'exec agentcodehandoff sessions "$@"\n'
+    elif kind == "drift":
+        command = 'exec agentcodehandoff drift "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -603,7 +661,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "sessions"):
+    for kind in ("dashboard", "auto-status", "status", "sessions", "drift"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -687,6 +745,25 @@ def _session_summary_line(session: dict[str, Any], width: int) -> str:
     return _truncate(f"{agent} [{state}] {scope} :: {branch}", width)
 
 
+def _session_drift_summary_line(session: dict[str, Any], drift: dict[str, Any], width: int) -> str:
+    agent = str(session.get("agent", "?")).strip() or "?"
+    scope = str(session.get("scope", "")).strip() or "(no scope)"
+    status = str(drift.get("status", "unknown"))
+    changed_count = len(drift.get("changed_files", []))
+    unexpected_count = len(drift.get("unexpected_files", []))
+    if status == "drift":
+        tail = f"{changed_count} changed, {unexpected_count} outside claim"
+    elif status == "aligned":
+        tail = f"{changed_count} changed, all claimed"
+    elif status == "clean":
+        tail = "no local changes"
+    elif status == "unscoped":
+        tail = f"{changed_count} changed, no claimed files"
+    else:
+        tail = "worktree missing"
+    return _truncate(f"{agent}::{scope} [{status}] {tail}", width)
+
+
 def _bridge_status_line(agent: str, state: dict[str, Any], width: int) -> str:
     last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
     now = datetime.now(timezone.utc)
@@ -717,6 +794,17 @@ def _conflict_lines(claims: list[dict[str, Any]], width: int, limit: int) -> lis
         )
         overlap_note = "same scope" if conflict["same_scope"] else ", ".join(conflict["overlapping_files"][:2]) or "file overlap"
         lines.append(_truncate(f"{left} <-> {right} ({overlap_note})", width))
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _drift_lines(sessions: list[dict[str, Any]], claims: list[dict[str, Any]], width: int, limit: int) -> list[str]:
+    lines: list[str] = []
+    for session in _active_sessions(sessions):
+        drift = _session_drift(session, claims)
+        if drift["status"] in {"aligned", "drift", "unscoped", "missing"}:
+            lines.append(_session_drift_summary_line(session, drift, width))
         if len(lines) >= limit:
             break
     return lines
@@ -829,8 +917,14 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     )
     lines.append("")
 
-    resolved_rows = [_claim_summary_line(claim, total_width - 4) for claim in resolved_claims] or ["No resolved claims"]
-    lines.extend(_render_panel("Recently Resolved", resolved_rows, total_width, height=8))
+    drift_rows = _drift_lines(sessions, claims, left_width - 4, limit=4) or ["No session drift"]
+    resolved_rows = [_claim_summary_line(claim, right_width - 4) for claim in resolved_claims] or ["No resolved claims"]
+    lines.extend(
+        _merge_columns(
+            _render_panel("File Awareness", drift_rows, left_width, height=8),
+            _render_panel("Recently Resolved", resolved_rows, right_width, height=8),
+        )
+    )
     lines.append("")
 
     recent_rows: list[str] = []
@@ -1041,6 +1135,27 @@ def cmd_status(args: argparse.Namespace) -> None:
             print(f"  repo: {session.get('repo_root', '')}")
             print()
 
+    print("File awareness")
+    print()
+    drift_found = False
+    for session in active_sessions[-args.sessions_limit:]:
+        drift = _session_drift(session, claims)
+        print(_session_drift_summary_line(session, drift, 120))
+        claim = drift.get("claim")
+        if claim:
+            print(f"  claim: {claim.get('scope', '')}")
+        changed_files = drift.get("changed_files", [])
+        if changed_files:
+            print(f"  changed: {', '.join(changed_files[:6])}")
+        unexpected_files = drift.get("unexpected_files", [])
+        if unexpected_files:
+            print(f"  outside claim: {', '.join(unexpected_files[:6])}")
+        print()
+        drift_found = True
+    if not drift_found:
+        print("none")
+        print()
+
 
 def cmd_claim(args: argparse.Namespace) -> None:
     claims = _read_claims(args.claims_path)
@@ -1143,6 +1258,34 @@ def cmd_sessions(args: argparse.Namespace) -> None:
         note = str(session.get("note", "")).strip()
         if note:
             print(f"  note: {note}")
+        print()
+
+
+def cmd_drift(args: argparse.Namespace) -> None:
+    claims = _read_claims(args.claims_path)
+    sessions = _read_sessions(args.sessions_path)
+    if args.agent:
+        sessions = [session for session in sessions if str(session.get("agent", "")).lower() == args.agent.lower()]
+    if not args.all:
+        sessions = _active_sessions(sessions)
+    sessions = sessions[-args.limit:]
+    if not sessions:
+        print("no sessions")
+        return
+    for session in sessions:
+        drift = _session_drift(session, claims)
+        print(_session_drift_summary_line(session, drift, 120))
+        claim = drift.get("claim")
+        if claim:
+            print(f"  claim: {claim.get('scope', '')}")
+        changed_files = drift.get("changed_files", [])
+        if changed_files:
+            print(f"  changed: {', '.join(changed_files[:8])}")
+        else:
+            print("  changed: none")
+        unexpected_files = drift.get("unexpected_files", [])
+        if unexpected_files:
+            print(f"  outside claim: {', '.join(unexpected_files[:8])}")
         print()
 
 
@@ -1565,6 +1708,12 @@ def build_parser() -> argparse.ArgumentParser:
     sessions_parser.add_argument("--limit", type=int, default=20)
     sessions_parser.add_argument("--all", action="store_true", help="include closed sessions")
     sessions_parser.set_defaults(func=cmd_sessions)
+
+    drift_parser = subparsers.add_parser("drift", help="inspect changed files in agent sessions against claimed scope")
+    drift_parser.add_argument("--agent", help="filter sessions by agent")
+    drift_parser.add_argument("--limit", type=int, default=20)
+    drift_parser.add_argument("--all", action="store_true", help="include closed sessions")
+    drift_parser.set_defaults(func=cmd_drift)
 
     session_end_parser = subparsers.add_parser("session-end", help="close an agent worktree session")
     session_end_parser.add_argument("--agent", required=True)

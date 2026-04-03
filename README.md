@@ -41,6 +41,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - Workflow updates for `request`, `done`, `blocked`, and `review`
 - Claim resolution with final states like `completed`, `blocked`, and `abandoned`
 - Git worktree-backed agent sessions for isolated edit space
+- File-awareness checks that compare live session edits to claimed files
 - Terminal-first workflow for two or more agents in one repo
 - Paneled terminal dashboard for bridge health, workflow, claims, conflicts, and recent messages
 - Local-first state with no daemon required
@@ -199,6 +200,12 @@ agentcodehandoff session-end \
   --note "Merged and cleaned up"
 ```
 
+Inspect live drift against claimed files:
+
+```bash
+agentcodehandoff drift
+```
+
 ## Core Commands
 
 ```bash
@@ -214,6 +221,7 @@ agentcodehandoff-dashboard
 agentcodehandoff-status
 agentcodehandoff claims
 agentcodehandoff sessions
+agentcodehandoff drift
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 ```
 
@@ -235,6 +243,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-auto-status`
 - `agentcodehandoff-status`
 - `agentcodehandoff-sessions`
+- `agentcodehandoff-drift`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-codex-read`
@@ -280,6 +289,7 @@ It shows:
 - recently resolved claims
 - recent message traffic
 - active worktree sessions
+- file-awareness drift summaries
 
 ## Worktree Sessions
 
@@ -305,6 +315,7 @@ Core commands:
 ```bash
 agentcodehandoff session-start --agent codex --scope parser-pass --repo /path/to/repo
 agentcodehandoff sessions
+agentcodehandoff drift
 agentcodehandoff session-end --agent codex --scope parser-pass
 ```
 
