@@ -134,6 +134,10 @@ def _bridge_profile_path(home: Path, agent: str) -> Path:
     return home / "bridges" / f"{agent}.profile.json"
 
 
+def _bridge_presets_path(home: Path) -> Path:
+    return home / "bridges" / "presets.json"
+
+
 def _read_bridge_lock(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -160,6 +164,21 @@ def _read_bridge_profile(path: Path) -> dict[str, Any]:
 
 
 def _write_bridge_profile(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_bridge_presets(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_bridge_presets(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -193,6 +212,19 @@ def _bridge_profile_summary_line(profile: dict[str, Any], width: int) -> str:
         f"{agent}: {repo} | {auto_sweep} | restart max={max_restarts} window={int(cool_off_seconds)}s",
         width,
     )
+
+
+def _bridge_runtime_settings(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "repo": str(source.get("repo", "")).strip(),
+        "interval": float(source.get("interval", 2.0) or 2.0),
+        "claim_on_files": bool(source.get("claim_on_files", False)),
+        "claim_scope_prefix": str(source.get("claim_scope_prefix", "auto-") or "auto-"),
+        "auto_sweep": bool(source.get("auto_sweep", False)),
+        "sweep_interval": float(source.get("sweep_interval", 30.0) or 30.0),
+        "max_restarts": int(source.get("max_restarts", 5) or 5),
+        "cool_off_seconds": float(source.get("cool_off_seconds", BRIDGE_COOL_OFF_SECONDS) or BRIDGE_COOL_OFF_SECONDS),
+    }
 
 
 def _append_bridge_event(path: Path, event_type: str, summary: str, *, detail: str = "") -> None:
@@ -1008,6 +1040,16 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff bridge-recover "$@"\n'
     elif kind == "bridge-profiles":
         command = 'exec agentcodehandoff bridge-profiles "$@"\n'
+    elif kind == "bridge-presets":
+        command = 'exec agentcodehandoff bridge-presets "$@"\n'
+    elif kind == "bridge-preset-show":
+        command = 'exec agentcodehandoff bridge-preset-show "$@"\n'
+    elif kind == "bridge-preset-save":
+        command = 'exec agentcodehandoff bridge-preset-save "$@"\n'
+    elif kind == "bridge-preset-apply":
+        command = 'exec agentcodehandoff bridge-preset-apply "$@"\n'
+    elif kind == "bridge-preset-delete":
+        command = 'exec agentcodehandoff bridge-preset-delete "$@"\n'
     elif kind == "bridge-profile-show":
         command = 'exec agentcodehandoff bridge-profile-show "$@"\n'
     elif kind == "bridge-profile-delete":
@@ -1091,7 +1133,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
+    for kind in ("dashboard", "ops", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -2712,6 +2754,112 @@ def cmd_bridge_profile_delete(args: argparse.Namespace) -> None:
     print(f"deleted saved profile for {args.agent}")
 
 
+def cmd_bridge_presets(args: argparse.Namespace) -> None:
+    presets = _read_bridge_presets(_bridge_presets_path(args.home))
+    if not presets:
+        print("no bridge presets")
+        return
+    for name, payload in sorted(presets.items()):
+        if not isinstance(payload, dict):
+            continue
+        agents = payload.get("agents", {})
+        if not isinstance(agents, dict):
+            agents = {}
+        agent_names = ", ".join(sorted(agents.keys())) or "none"
+        updated_at = str(payload.get("updated_at", "")).strip()
+        line = f"{name}: {agent_names}"
+        if updated_at:
+            line += f" | updated {_format_timestamp(updated_at)}"
+        print(line)
+
+
+def cmd_bridge_preset_show(args: argparse.Namespace) -> None:
+    presets = _read_bridge_presets(_bridge_presets_path(args.home))
+    payload = presets.get(args.name)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"no bridge preset named {args.name}")
+    print(json.dumps(payload, indent=2))
+
+
+def cmd_bridge_preset_delete(args: argparse.Namespace) -> None:
+    path = _bridge_presets_path(args.home)
+    presets = _read_bridge_presets(path)
+    if args.name not in presets:
+        print(f"no bridge preset named {args.name}")
+        return
+    del presets[args.name]
+    _write_bridge_presets(path, presets)
+    print(f"deleted bridge preset {args.name}")
+
+
+def cmd_bridge_preset_save(args: argparse.Namespace) -> None:
+    presets_path = _bridge_presets_path(args.home)
+    presets = _read_bridge_presets(presets_path)
+    agent_payloads: dict[str, Any] = {}
+    for agent in args.agents:
+        profile = _read_bridge_profile(_bridge_profile_path(args.home, agent))
+        if not profile:
+            raise SystemExit(f"no saved profile for {agent}")
+        agent_payloads[agent] = _bridge_runtime_settings(profile)
+    presets[args.name] = {
+        "name": args.name,
+        "updated_at": _now_iso(),
+        "agents": agent_payloads,
+    }
+    _write_bridge_presets(presets_path, presets)
+    print(f"saved bridge preset {args.name}")
+
+
+def cmd_bridge_preset_apply(args: argparse.Namespace) -> None:
+    presets = _read_bridge_presets(_bridge_presets_path(args.home))
+    payload = presets.get(args.name)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"no bridge preset named {args.name}")
+    agents_block = payload.get("agents", {})
+    if not isinstance(agents_block, dict) or not agents_block:
+        raise SystemExit(f"bridge preset {args.name} has no agents")
+
+    selected_agents = args.agents or sorted(agents_block.keys())
+    for agent in selected_agents:
+        config = agents_block.get(agent)
+        if not isinstance(config, dict):
+            print(f"{agent}: not present in preset {args.name}")
+            continue
+        runtime = _bridge_runtime_settings(config)
+        _save_bridge_profile(
+            args.home,
+            {
+                "agent": agent,
+                **runtime,
+            },
+        )
+        print(f"{agent}: applied preset {args.name}")
+        if not args.start:
+            continue
+        status = _supervised_bridge_status(args.home, args.inbox_path, agent)
+        command_args = argparse.Namespace(
+            home=args.home,
+            inbox_path=args.inbox_path,
+            claims_path=args.claims_path,
+            sessions_path=args.sessions_path,
+            agent=agent,
+            repo=Path(runtime["repo"] or str(args.repo)),
+            interval=float(runtime["interval"]),
+            claim_on_files=bool(runtime["claim_on_files"]),
+            claim_scope_prefix=str(runtime["claim_scope_prefix"]),
+            verbose=args.verbose,
+            timeout=args.timeout,
+            auto_sweep=bool(runtime["auto_sweep"]),
+            sweep_interval=float(runtime["sweep_interval"]),
+            max_restarts=int(runtime["max_restarts"]),
+            cool_off_seconds=float(runtime["cool_off_seconds"]),
+        )
+        if bool(status.get("alive")) or bool(status.get("lock", {}).get("paused", False)):
+            cmd_bridge_restart(command_args)
+        else:
+            cmd_bridge_start(command_args)
+
+
 def cmd_bridge_start(args: argparse.Namespace) -> None:
     status = _supervised_bridge_status(args.home, args.inbox_path, args.agent)
     if status["alive"]:
@@ -3250,6 +3398,31 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_profiles_parser = subparsers.add_parser("bridge-profiles", help="list saved bridge profiles")
     bridge_profiles_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     bridge_profiles_parser.set_defaults(func=cmd_bridge_profiles)
+
+    bridge_presets_parser = subparsers.add_parser("bridge-presets", help="list saved bridge presets")
+    bridge_presets_parser.set_defaults(func=cmd_bridge_presets)
+
+    bridge_preset_show_parser = subparsers.add_parser("bridge-preset-show", help="show one saved bridge preset")
+    bridge_preset_show_parser.add_argument("--name", required=True)
+    bridge_preset_show_parser.set_defaults(func=cmd_bridge_preset_show)
+
+    bridge_preset_save_parser = subparsers.add_parser("bridge-preset-save", help="save the current bridge profiles as a named preset")
+    bridge_preset_save_parser.add_argument("--name", required=True)
+    bridge_preset_save_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_preset_save_parser.set_defaults(func=cmd_bridge_preset_save)
+
+    bridge_preset_apply_parser = subparsers.add_parser("bridge-preset-apply", help="apply a named bridge preset to saved profiles and optionally start bridges")
+    bridge_preset_apply_parser.add_argument("--name", required=True)
+    bridge_preset_apply_parser.add_argument("--agents", nargs="+")
+    bridge_preset_apply_parser.add_argument("--start", action="store_true", help="start or restart bridges using the preset")
+    bridge_preset_apply_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="fallback repo if the preset has no saved repo")
+    bridge_preset_apply_parser.add_argument("--verbose", action="store_true")
+    bridge_preset_apply_parser.add_argument("--timeout", type=float, default=3.0)
+    bridge_preset_apply_parser.set_defaults(func=cmd_bridge_preset_apply)
+
+    bridge_preset_delete_parser = subparsers.add_parser("bridge-preset-delete", help="delete a named bridge preset")
+    bridge_preset_delete_parser.add_argument("--name", required=True)
+    bridge_preset_delete_parser.set_defaults(func=cmd_bridge_preset_delete)
 
     bridge_profile_show_parser = subparsers.add_parser("bridge-profile-show", help="show the saved profile for one agent")
     bridge_profile_show_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])

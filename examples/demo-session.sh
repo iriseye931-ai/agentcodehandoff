@@ -19,14 +19,22 @@ $CLI --home "$TMP_HOME" claim \
   --files "src/app.tsx,src/layout.tsx"
 
 echo
-echo "== hermes handoff =="
+echo "== hermes request =="
 $CLI --home "$TMP_HOME" send \
   --from-agent hermes \
   --to-agent codex \
-  --summary "Sphere pass complete" \
-  --details "Mesh graph glow and panel chrome are ready for integration." \
-  --files "src/mesh_graph.tsx"
+  --summary "Need README onboarding polish" \
+  --details "Please tighten first-run docs and verify the supervised bridge steps." \
+  --role request \
+  --files "README.md,examples/demo-session.sh"
 
 echo
 echo "== status =="
 $CLI --home "$TMP_HOME" status
+
+echo
+echo "== next steps in a real repo =="
+echo "$CLI --home \"$TMP_HOME\" bridge-status"
+echo "$CLI --home \"$TMP_HOME\" bridge-profile-show --agent codex"
+echo "$CLI --home \"$TMP_HOME\" dashboard --view ops"
+echo "$CLI --home \"$TMP_HOME\" bridge-recover"

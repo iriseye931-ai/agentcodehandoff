@@ -72,6 +72,13 @@ For the full supervised collaboration path, start with:
 4. `agentcodehandoff dashboard --view ops`
 5. `agentcodehandoff bridge-status`
 
+If you are the second collaborator terminal, keep this shorter loop:
+
+1. `agentcodehandoff-hermes-watch`
+2. `agentcodehandoff dashboard --view ops`
+3. `agentcodehandoff bridge-status`
+4. `agentcodehandoff bridge-profile-show --agent hermes`
+
 ## First Run
 
 ```bash
@@ -117,6 +124,7 @@ Inspect supervised bridge health:
 ```bash
 agentcodehandoff bridge-status
 agentcodehandoff bridge-profiles
+agentcodehandoff bridge-presets
 ```
 
 Open the live terminal dashboard. Use the default view for coordination and the ops view for bridge supervision, stale requests, and recovery visibility:
@@ -270,11 +278,123 @@ agentcodehandoff bridge-recover
 
 Bridge recovery uses the last saved per-agent profile even after a full stop removes the live lock.
 
+## Recommended Onboarding For Codex + Claude/Hermes
+
+This is the clearest path for two-agent collaboration in one shared repo.
+
+1. Install and verify local state.
+
+```bash
+./install.sh
+agentcodehandoff doctor
+```
+
+2. Start supervised bridges for each agent that should auto-reply.
+
+```bash
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
+```
+
+3. Keep one terminal on the ops dashboard.
+
+```bash
+agentcodehandoff dashboard --view ops
+```
+
+4. In active agent terminals, use claims plus `request`, `done`, `blocked`, and `review` updates.
+
+5. If a bridge stops responding, inspect it first:
+
+```bash
+agentcodehandoff bridge-status
+agentcodehandoff requests
+agentcodehandoff request-sweep
+```
+
+6. If the bridge is down or paused, recover it using the saved profile:
+
+```bash
+agentcodehandoff bridge-recover
+```
+
+7. If recovery is exhausted, fall back to manual auto terminals:
+
+```bash
+agentcodehandoff-codex-auto --repo /path/to/repo
+agentcodehandoff-hermes-auto --repo /path/to/repo
+```
+
+This gives a clean split:
+
+- supervised bridges for normal unattended routing
+- ops dashboard for health and stale-request visibility
+- manual auto terminals as a safe fallback during bring-up or debugging
+
+## Supervised Bridge Workflow
+
+Use this when you want the tool to keep automation alive without manual babysitting.
+
+Start bridges:
+
+```bash
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
+```
+
+Inspect health:
+
+```bash
+agentcodehandoff bridge-status
+agentcodehandoff dashboard --view ops
+```
+
+Common checks:
+
+- `bridge-status` for pid, heartbeat, pending requests, restart counts, and saved profile timestamps
+- `dashboard --view ops` for at-a-glance bridge state, stale requests, and remediation context
+- `requests` and `request-sweep` when work is stuck but the bridge still appears alive
+
+Stop or restart a specific bridge:
+
+```bash
+agentcodehandoff bridge-stop --agent codex
+agentcodehandoff bridge-restart --agent codex --repo /path/to/repo
+```
+
+## Profile Recovery Workflow
+
+Supervised bridges persist a per-agent profile so recovery does not depend on a live lock file surviving.
+
+Typical recovery loop:
+
+1. A bridge is down, paused, or missing after a shell restart.
+2. `agentcodehandoff bridge-status` shows no healthy live process, but still shows the saved repo profile.
+3. `agentcodehandoff bridge-recover` restarts the bridge using the last saved settings.
+4. `agentcodehandoff dashboard --view ops` confirms heartbeat and pending request state.
+
+Example:
+
+```bash
+agentcodehandoff bridge-status
+agentcodehandoff bridge-recover
+agentcodehandoff bridge-status
+```
+
+Use `bridge-recover --fail-if-idle` in scripts when you want a non-zero exit if nothing actually needed recovery.
+
 Inspect or delete a saved bridge profile:
 
 ```bash
 agentcodehandoff bridge-profile-show --agent codex
 agentcodehandoff bridge-profile-delete --agent hermes
+```
+
+Save reusable bridge presets and apply them later:
+
+```bash
+agentcodehandoff bridge-preset-save --name local-pair --agents codex hermes
+agentcodehandoff bridge-preset-apply --name local-pair --start
 ```
 
 Apply a safe remediation automatically:
@@ -320,8 +440,9 @@ agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 - initializes state
 - creates wrappers
 - records a claim
-- sends a handoff
+- sends a request-style handoff
 - prints status
+- prints the next supervised bridge and ops commands to try in a real repo
 
 ## Wrapper Commands
 
