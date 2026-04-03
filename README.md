@@ -115,6 +115,13 @@ Check whether the bridges appear alive:
 agentcodehandoff auto-status
 ```
 
+Override an agent's availability when you already know it is offline or rate-limited:
+
+```bash
+agentcodehandoff availability-set --agent claude --state rate-limited --note "subscription window exhausted"
+agentcodehandoff availability
+```
+
 For day-to-day supervised operation, prefer managed background bridges instead of keeping separate reply terminals open:
 
 ```bash
@@ -470,6 +477,8 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-requests`
 - `agentcodehandoff-request-sweep`
 - `agentcodehandoff-remediate`
+- `agentcodehandoff-availability`
+- `agentcodehandoff-availability-set`
 - `agentcodehandoff-bridge-status`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`

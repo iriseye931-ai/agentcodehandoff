@@ -259,6 +259,25 @@ def _write_bridge_presets(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _agent_availability_path(home: Path) -> Path:
+    return home / "availability.json"
+
+
+def _read_agent_availability(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_agent_availability(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def _save_bridge_profile(home: Path, payload: dict[str, Any]) -> None:
     agent = str(payload.get("agent", "")).strip()
     if not agent:
@@ -367,6 +386,7 @@ def _is_hard_failure(failure_class: str) -> bool:
 
 
 def _agent_availability(home: Path, inbox_path: Path, agent: str) -> dict[str, Any]:
+    manual = _read_agent_availability(_agent_availability_path(home)).get(agent, {})
     status = _supervised_bridge_status(home, inbox_path, agent)
     automation_state = status.get("automation_state", {}) if isinstance(status.get("automation_state"), dict) else {}
     last_error = str(automation_state.get("last_error", "")).strip()
@@ -374,6 +394,19 @@ def _agent_availability(home: Path, inbox_path: Path, agent: str) -> dict[str, A
     available = True
     penalty = 0
     reason = ""
+    override_state = str(manual.get("state", "")).strip().lower() if isinstance(manual, dict) else ""
+    override_note = str(manual.get("note", "")).strip() if isinstance(manual, dict) else ""
+    if override_state in {"offline", "disabled"}:
+        available = False
+        penalty = 1000
+        reason = override_state
+    elif override_state in {"rate-limited", "rate_limit"}:
+        available = False
+        penalty = 250
+        reason = "rate-limit"
+    elif override_state in {"degraded"}:
+        penalty = 50
+        reason = "degraded"
     if failure_class in {"auth", "missing-dependency"}:
         available = False
         penalty = 1000
@@ -396,6 +429,8 @@ def _agent_availability(home: Path, inbox_path: Path, agent: str) -> dict[str, A
         "status": status,
         "last_error": last_error,
         "failure_class": failure_class,
+        "override_state": override_state,
+        "override_note": override_note,
     }
 
 
@@ -1266,6 +1301,14 @@ def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
     for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
+        path = bin_dir / f"agentcodehandoff-{kind}"
+        if path.exists() and not force:
+            wrappers.append(path)
+            continue
+        path.write_text(_generic_wrapper_script(kind), encoding="utf-8")
+        path.chmod(0o755)
+        wrappers.append(path)
+    for kind in ("availability", "availability-set"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -2209,6 +2252,36 @@ def cmd_route(args: argparse.Namespace) -> None:
             print(f"{candidate}_available: {available_text}{suffix}")
     if meta["reasons"][agent]:
         print("reasons:", ", ".join(meta["reasons"][agent]))
+
+
+def cmd_availability(args: argparse.Namespace) -> None:
+    availability = _read_agent_availability(_agent_availability_path(args.home))
+    agents = args.agents or _default_agents()
+    for agent in agents:
+        record = availability.get(agent, {})
+        state = str(record.get("state", "")).strip() if isinstance(record, dict) else ""
+        note = str(record.get("note", "")).strip() if isinstance(record, dict) else ""
+        updated_at = str(record.get("updated_at", "")).strip() if isinstance(record, dict) else ""
+        state_text = state or "auto"
+        print(f"{agent}: {state_text}")
+        if note:
+            print(f"  note: {note}")
+        if updated_at:
+            print(f"  updated: {_format_timestamp(updated_at)}")
+        print()
+
+
+def cmd_availability_set(args: argparse.Namespace) -> None:
+    availability = _read_agent_availability(_agent_availability_path(args.home))
+    availability[args.agent] = {
+        "state": args.state,
+        "note": args.note,
+        "updated_at": _now_iso(),
+    }
+    _write_agent_availability(_agent_availability_path(args.home), availability)
+    print(f"{args.agent}: {args.state}")
+    if args.note:
+        print(f"note: {args.note}")
 
 
 def cmd_dispatch(args: argparse.Namespace) -> None:
@@ -3694,6 +3767,16 @@ def build_parser() -> argparse.ArgumentParser:
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether auto bridges appear alive")
     auto_status_parser.add_argument("--agents", nargs="+", default=_default_agents())
     auto_status_parser.set_defaults(func=cmd_auto_status)
+
+    availability_parser = subparsers.add_parser("availability", help="show manual availability overrides for agents")
+    availability_parser.add_argument("--agents", nargs="+", default=_default_agents())
+    availability_parser.set_defaults(func=cmd_availability)
+
+    availability_set_parser = subparsers.add_parser("availability-set", help="override an agent's availability for routing and ops")
+    availability_set_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
+    availability_set_parser.add_argument("--state", required=True, choices=["auto", "available", "degraded", "rate-limited", "offline", "disabled"])
+    availability_set_parser.add_argument("--note", default="")
+    availability_set_parser.set_defaults(func=cmd_availability_set)
 
     bridge_status_parser = subparsers.add_parser("bridge-status", help="show supervised bridge health, pid, and pending requests")
     bridge_status_parser.add_argument("--agents", nargs="+", default=_default_agents())
