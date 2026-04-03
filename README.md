@@ -77,6 +77,12 @@ agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 ```
 
+Enable automatic file claims from bridge replies:
+
+```bash
+agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox --claim-on-files
+```
+
 Check whether the bridges appear alive:
 
 ```bash
@@ -95,9 +101,7 @@ agentcodehandoff-codex-send \
 Send an auto-reply request:
 
 ```bash
-agentcodehandoff request \
-  --from-agent codex \
-  --to-agent hermes \
+agentcodehandoff-codex-request \
   --summary "Need a quick review" \
   --details "Reply automatically with short feedback." \
   --files "README.md"
@@ -147,6 +151,8 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-hermes-auto`
 - `agentcodehandoff-codex-send`
 - `agentcodehandoff-hermes-send`
+- `agentcodehandoff-codex-request`
+- `agentcodehandoff-hermes-request`
 - `agentcodehandoff-codex-claim`
 - `agentcodehandoff-hermes-claim`
 - `agentcodehandoff-codex-release`
@@ -173,6 +179,14 @@ Example:
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff auto-status
+```
+
+Auto-claim example:
+
+```bash
+agentcodehandoff-hermes-auto \
+  --repo /Users/iris/Projects/agent-inbox \
+  --claim-on-files
 ```
 
 Notes:

@@ -348,6 +348,15 @@ def _wrapper_script(kind: str, agent: str) -> str:
         command = f'exec agentcodehandoff read --agent "{agent}" "$@"\n'
     elif kind == "auto":
         command = f'exec agentcodehandoff auto --agent "{agent}" "$@"\n'
+    elif kind == "request":
+        default_to = "hermes" if agent == "codex" else "codex"
+        command = (
+            'if [ "$#" -lt 1 ]; then\n'
+            f'  echo "usage: agentcodehandoff-{agent}-request --summary <text> [extra args]" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            f'exec agentcodehandoff request --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
+        )
     elif kind == "claim":
         command = f'exec agentcodehandoff claim --agent "{agent}" "$@"\n'
     elif kind == "release":
@@ -370,7 +379,7 @@ def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
     for agent in ("codex", "hermes"):
-        for kind in ("watch", "read", "auto", "send", "claim", "release"):
+        for kind in ("watch", "read", "auto", "send", "request", "claim", "release"):
             path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
             if path.exists() and not force:
                 wrappers.append(path)
@@ -584,6 +593,21 @@ def cmd_auto(args: argparse.Namespace) -> None:
             summary = str(response.get("summary", "")).strip() or f"{args.agent} reply"
             details = str(response.get("details", "")).strip()
             files = response.get("files") if isinstance(response.get("files"), list) else []
+            normalized_files = [str(item) for item in files if str(item).strip()]
+            if args.claim_on_files and normalized_files:
+                claims = _read_claims(args.claims_path)
+                scope = f"{args.claim_scope_prefix}{message_id}"
+                claim = {
+                    "id": f"claim-{datetime.now(timezone.utc).timestamp():.6f}",
+                    "timestamp": _now_iso(),
+                    "agent": args.agent,
+                    "scope": scope,
+                    "summary": summary,
+                    "files": normalized_files,
+                    "released": False,
+                }
+                claims.append(claim)
+                _write_claims(args.claims_path, claims)
             record = _write_message(
                 args.inbox_path,
                 {
@@ -593,7 +617,7 @@ def cmd_auto(args: argparse.Namespace) -> None:
                     "task": str(message.get("task", "")).strip() or "auto-response",
                     "summary": summary,
                     "details": details,
-                    "files": [str(item) for item in files if str(item).strip()],
+                    "files": normalized_files,
                 },
             )
             if args.verbose:
@@ -743,6 +767,8 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--interval", type=float, default=2.0)
     auto_parser.add_argument("--once", action="store_true", help="process pending messages once and exit")
     auto_parser.add_argument("--verbose", action="store_true")
+    auto_parser.add_argument("--claim-on-files", action="store_true", help="create a claim automatically when the agent reply includes files")
+    auto_parser.add_argument("--claim-scope-prefix", default="auto-", help="scope prefix used for auto-generated claims")
     auto_parser.set_defaults(func=cmd_auto)
 
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
