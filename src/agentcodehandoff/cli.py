@@ -362,6 +362,18 @@ def _built_in_templates(repo: Path) -> dict[str, dict[str, Any]]:
     }
 
 
+def _resolve_preset(home: Path, repo: Path, name: str) -> dict[str, Any]:
+    presets = _read_bridge_presets(_bridge_presets_path(home))
+    presets.update({preset_name: payload for preset_name, payload in _built_in_templates(repo).items() if preset_name not in presets})
+    payload = presets.get(name)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"no bridge preset named {name}")
+    agents_block = payload.get("agents", {})
+    if not isinstance(agents_block, dict) or not agents_block:
+        raise SystemExit(f"bridge preset {name} has no agents")
+    return payload
+
+
 def _append_bridge_event(path: Path, event_type: str, summary: str, *, detail: str = "") -> None:
     payload = _read_bridge_lock(path)
     history = payload.get("recent_events", [])
@@ -1271,6 +1283,16 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff request-escalate "$@"\n'
     elif kind == "request-resolve":
         command = 'exec agentcodehandoff request-resolve "$@"\n'
+    elif kind == "availability":
+        command = 'exec agentcodehandoff availability "$@"\n'
+    elif kind == "availability-set":
+        command = 'exec agentcodehandoff availability-set "$@"\n'
+    elif kind == "up":
+        command = 'exec agentcodehandoff up "$@"\n'
+    elif kind == "down":
+        command = 'exec agentcodehandoff down "$@"\n'
+    elif kind == "restart-team":
+        command = 'exec agentcodehandoff restart-team "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -1340,7 +1362,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "up", "down", "restart-team"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -3149,11 +3171,7 @@ def cmd_bridge_presets(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_preset_show(args: argparse.Namespace) -> None:
-    presets = _read_bridge_presets(_bridge_presets_path(args.home))
-    presets.update({name: payload for name, payload in _built_in_templates(args.repo).items() if name not in presets})
-    payload = presets.get(args.name)
-    if not isinstance(payload, dict):
-        raise SystemExit(f"no bridge preset named {args.name}")
+    payload = _resolve_preset(args.home, args.repo, args.name)
     print(json.dumps(payload, indent=2))
 
 
@@ -3187,14 +3205,8 @@ def cmd_bridge_preset_save(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_preset_apply(args: argparse.Namespace) -> None:
-    presets = _read_bridge_presets(_bridge_presets_path(args.home))
-    presets.update({name: payload for name, payload in _built_in_templates(args.repo).items() if name not in presets})
-    payload = presets.get(args.name)
-    if not isinstance(payload, dict):
-        raise SystemExit(f"no bridge preset named {args.name}")
+    payload = _resolve_preset(args.home, args.repo, args.name)
     agents_block = payload.get("agents", {})
-    if not isinstance(agents_block, dict) or not agents_block:
-        raise SystemExit(f"bridge preset {args.name} has no agents")
 
     selected_agents = args.agents or sorted(agents_block.keys())
     for agent in selected_agents:
@@ -3422,6 +3434,70 @@ def cmd_bridge_recover(args: argparse.Namespace) -> None:
         recovered = True
     if not recovered and args.fail_if_idle:
         raise SystemExit("no bridges required recovery")
+
+
+def cmd_up(args: argparse.Namespace) -> None:
+    apply_args = argparse.Namespace(
+        home=args.home,
+        inbox_path=args.inbox_path,
+        claims_path=args.claims_path,
+        sessions_path=args.sessions_path,
+        name=args.template,
+        agents=args.agents,
+        start=True,
+        repo=args.repo,
+        verbose=args.verbose,
+        timeout=args.timeout,
+    )
+    cmd_bridge_preset_apply(apply_args)
+
+
+def cmd_down(args: argparse.Namespace) -> None:
+    payload = _resolve_preset(args.home, args.repo, args.template)
+    agents_block = payload.get("agents", {})
+    selected_agents = args.agents or sorted(agents_block.keys())
+    for agent in selected_agents:
+        stop_args = argparse.Namespace(
+            home=args.home,
+            agent=agent,
+            timeout=args.timeout,
+            force=args.force,
+        )
+        cmd_bridge_stop(stop_args)
+
+
+def cmd_restart_team(args: argparse.Namespace) -> None:
+    payload = _resolve_preset(args.home, args.repo, args.template)
+    agents_block = payload.get("agents", {})
+    selected_agents = args.agents or sorted(agents_block.keys())
+    for agent in selected_agents:
+        config = agents_block.get(agent)
+        if not isinstance(config, dict):
+            print(f"{agent}: not present in preset {args.template}")
+            continue
+        runtime = _bridge_runtime_settings(config)
+        restart_args = argparse.Namespace(
+            home=args.home,
+            inbox_path=args.inbox_path,
+            claims_path=args.claims_path,
+            sessions_path=args.sessions_path,
+            repo=Path(runtime["repo"] or str(args.repo)),
+            agent=agent,
+            interval=float(runtime["interval"]),
+            claim_on_files=bool(runtime["claim_on_files"]),
+            claim_scope_prefix=str(runtime["claim_scope_prefix"]),
+            verbose=args.verbose,
+            timeout=args.timeout,
+            auto_sweep=bool(runtime["auto_sweep"]),
+            sweep_interval=float(runtime["sweep_interval"]),
+            max_restarts=int(runtime["max_restarts"]),
+            cool_off_seconds=float(runtime["cool_off_seconds"]),
+        )
+        status = _supervised_bridge_status(args.home, args.inbox_path, agent)
+        if bool(status.get("alive")) or bool(status.get("lock")):
+            cmd_bridge_restart(restart_args)
+        else:
+            cmd_bridge_start(restart_args)
 
 
 def cmd_ops_next(args: argparse.Namespace) -> None:
@@ -3860,6 +3936,30 @@ def build_parser() -> argparse.ArgumentParser:
     availability_set_parser.add_argument("--state", required=True, choices=["auto", "available", "degraded", "rate-limited", "offline", "disabled"])
     availability_set_parser.add_argument("--note", default="")
     availability_set_parser.set_defaults(func=cmd_availability_set)
+
+    up_parser = subparsers.add_parser("up", help="start a named team template or preset")
+    up_parser.add_argument("--template", default="local-trio", help="preset or built-in template name")
+    up_parser.add_argument("--agents", nargs="+", help="optional subset of agents in the template")
+    up_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo path used for built-in template defaults")
+    up_parser.add_argument("--verbose", action="store_true")
+    up_parser.add_argument("--timeout", type=float, default=3.0)
+    up_parser.set_defaults(func=cmd_up)
+
+    down_parser = subparsers.add_parser("down", help="stop a named team template or preset")
+    down_parser.add_argument("--template", default="local-trio", help="preset or built-in template name")
+    down_parser.add_argument("--agents", nargs="+", help="optional subset of agents in the template")
+    down_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo path used for built-in template defaults")
+    down_parser.add_argument("--timeout", type=float, default=3.0)
+    down_parser.add_argument("--force", action="store_true")
+    down_parser.set_defaults(func=cmd_down)
+
+    restart_team_parser = subparsers.add_parser("restart-team", help="restart a named team template or preset")
+    restart_team_parser.add_argument("--template", default="local-trio", help="preset or built-in template name")
+    restart_team_parser.add_argument("--agents", nargs="+", help="optional subset of agents in the template")
+    restart_team_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo path used for built-in template defaults")
+    restart_team_parser.add_argument("--verbose", action="store_true")
+    restart_team_parser.add_argument("--timeout", type=float, default=3.0)
+    restart_team_parser.set_defaults(func=cmd_restart_team)
 
     bridge_status_parser = subparsers.add_parser("bridge-status", help="show supervised bridge health, pid, and pending requests")
     bridge_status_parser.add_argument("--agents", nargs="+", default=_default_agents())

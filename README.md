@@ -136,6 +136,14 @@ Or apply the built-in trio preset in one step:
 agentcodehandoff bridge-preset-apply --name local-trio --repo /path/to/repo --start
 ```
 
+Or use the higher-level team lifecycle commands:
+
+```bash
+agentcodehandoff up --template local-trio --repo /path/to/repo
+agentcodehandoff down --template local-trio --repo /path/to/repo
+agentcodehandoff restart-team --template local-trio --repo /path/to/repo
+```
+
 Inspect supervised bridge health:
 
 ```bash
@@ -485,6 +493,9 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-remediate`
 - `agentcodehandoff-availability`
 - `agentcodehandoff-availability-set`
+- `agentcodehandoff-up`
+- `agentcodehandoff-down`
+- `agentcodehandoff-restart-team`
 - `agentcodehandoff-bridge-status`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
