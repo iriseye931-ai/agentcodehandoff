@@ -10,7 +10,7 @@
   <em>A local-first shared handoff stream and claim board for Codex, Hermes, and other terminal agents.</em>
 </p>
 
-`agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, and a durable local record of who is doing what.
+`agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, workflow-state updates, and a durable local record of who is doing what.
 
 It is built for teams running:
 
@@ -26,6 +26,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - no durable handoff stream
 - no clear ownership of files or scopes
 - no quick way to see who is doing what
+- no shared notion of blocked, done, or review-ready work
 - too much manual relaying between terminals
 
 `agentcodehandoff` fixes that with a small, explicit local state model:
@@ -37,6 +38,8 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 - Shared inbox for agent-to-agent handoffs
 - Lightweight claim board for file and scope ownership
+- Workflow updates for `request`, `done`, `blocked`, and `review`
+- Claim resolution with final states like `completed`, `blocked`, and `abandoned`
 - Terminal-first workflow for two or more agents in one repo
 - Local-first state with no daemon required
 - Agent-specific wrapper commands for faster day-to-day use
@@ -132,6 +135,43 @@ agentcodehandoff-hermes-claim \
   --files "frontend/src/components/MeshGraph.tsx"
 ```
 
+Send a completion update:
+
+```bash
+agentcodehandoff-codex-done \
+  --summary "CLI workflow states shipped" \
+  --details "done, blocked, review, and claim resolution are live." \
+  --files "src/agentcodehandoff/cli.py,README.md"
+```
+
+Signal a blocker:
+
+```bash
+agentcodehandoff-hermes-blocked \
+  --summary "Need routing policy input" \
+  --details "Current heuristics are too generic for design-vs-code review tasks." \
+  --files "src/agentcodehandoff/cli.py"
+```
+
+Request review:
+
+```bash
+agentcodehandoff-codex-review \
+  --summary "Review the dispatch heuristics" \
+  --details "Check whether docs-heavy mixed tasks should route to Hermes." \
+  --files "src/agentcodehandoff/cli.py,README.md"
+```
+
+Resolve a claim:
+
+```bash
+agentcodehandoff resolve \
+  --agent codex \
+  --scope cli-workflow-pass \
+  --status completed \
+  --note "Merged and verified locally."
+```
+
 ## Core Commands
 
 ```bash
@@ -144,6 +184,7 @@ agentcodehandoff status
 agentcodehandoff auto-status
 agentcodehandoff dashboard
 agentcodehandoff claims
+agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 ```
 
 ## Demo
@@ -172,6 +213,12 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-hermes-request`
 - `agentcodehandoff-codex-claim`
 - `agentcodehandoff-hermes-claim`
+- `agentcodehandoff-codex-done`
+- `agentcodehandoff-hermes-done`
+- `agentcodehandoff-codex-blocked`
+- `agentcodehandoff-hermes-blocked`
+- `agentcodehandoff-codex-review`
+- `agentcodehandoff-hermes-review`
 - `agentcodehandoff-codex-release`
 - `agentcodehandoff-hermes-release`
 
@@ -179,9 +226,11 @@ Installed by `agentcodehandoff init --install-wrappers`:
 
 1. Agent A claims a bounded scope.
 2. Agent B claims a non-overlapping scope.
-3. Both agents keep `watch` running.
-4. Each agent sends concise handoffs after bounded work.
-5. Use `agentcodehandoff status` to inspect latest handoffs and open claims.
+3. Both agents keep `watch` or `dashboard` running.
+4. Use `request` for work that expects a response.
+5. Use `done`, `blocked`, or `review` so progress reads like a workflow, not raw chat.
+6. Resolve claims with `completed`, `blocked`, or `abandoned` when work closes out.
+7. Use `agentcodehandoff status` to inspect latest handoffs, workflow events, open claims, and recently resolved claims.
 
 ## Auto Reply
 

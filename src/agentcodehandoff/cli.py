@@ -21,6 +21,7 @@ DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
 AUTOMATION_STALE_SECONDS = 30
 DASHBOARD_RECENT_MESSAGES = 8
+RECENT_WORKFLOW_MESSAGES = 6
 
 
 def _now_iso() -> str:
@@ -144,6 +145,32 @@ def _write_message(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
     return record
+
+
+def _send_record(
+    inbox_path: Path,
+    *,
+    from_agent: str,
+    to_agent: str,
+    role: str,
+    task: str,
+    summary: str,
+    details: str,
+    files: str | list[str] | None,
+) -> dict[str, Any]:
+    normalized_files = files if isinstance(files, list) else _split_files(files or "")
+    return _write_message(
+        inbox_path,
+        {
+            "from": from_agent,
+            "to": to_agent,
+            "role": role,
+            "task": task,
+            "summary": summary,
+            "details": details,
+            "files": normalized_files,
+        },
+    )
 
 
 def _pending_messages_for_agent(messages: list[dict[str, Any]], agent: str, seen_ids: set[str]) -> list[dict[str, Any]]:
@@ -354,20 +381,33 @@ def _print_message(message: dict[str, Any]) -> None:
 
 
 def _print_claim(claim: dict[str, Any]) -> None:
-    print(f"[{_format_timestamp(str(claim.get('timestamp', '')))}] {claim.get('agent', '?')} claims {claim.get('scope', '')}")
+    state = str(claim.get("state", "open")).strip() or "open"
+    print(
+        f"[{_format_timestamp(str(claim.get('timestamp', '')))}] "
+        f"{claim.get('agent', '?')} claims {claim.get('scope', '')} [{state}]"
+    )
     summary = str(claim.get("summary", "")).strip()
     if summary:
         print(f"summary: {summary}")
     files = claim.get("files") or []
     if files:
         print("files:", ", ".join(str(item) for item in files))
-    if claim.get("released"):
-        print(f"released: {claim.get('released_at', '')}")
+    resolution_note = str(claim.get("resolution_note", "")).strip()
+    if resolution_note:
+        print(f"note: {resolution_note}")
+    if state != "open":
+        resolved_at = str(claim.get("resolved_at", "")).strip() or str(claim.get("released_at", "")).strip()
+        if resolved_at:
+            print(f"resolved: {resolved_at}")
     print()
 
 
 def _open_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [claim for claim in claims if not claim.get("released")]
+    return [claim for claim in claims if str(claim.get("state", "open")).strip() == "open" and not claim.get("released")]
+
+
+def _resolved_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [claim for claim in claims if str(claim.get("state", "open")).strip() != "open" or claim.get("released")]
 
 
 def _claim_conflicts(existing_claims: list[dict[str, Any]], candidate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -429,6 +469,33 @@ def _wrapper_script(kind: str, agent: str) -> str:
         )
     elif kind == "claim":
         command = f'exec agentcodehandoff claim --agent "{agent}" "$@"\n'
+    elif kind == "done":
+        default_to = "hermes" if agent == "codex" else "codex"
+        command = (
+            'if [ "$#" -lt 1 ]; then\n'
+            f'  echo "usage: agentcodehandoff-{agent}-done --summary <text> [extra args]" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            f'exec agentcodehandoff done --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
+        )
+    elif kind == "blocked":
+        default_to = "hermes" if agent == "codex" else "codex"
+        command = (
+            'if [ "$#" -lt 1 ]; then\n'
+            f'  echo "usage: agentcodehandoff-{agent}-blocked --summary <text> [extra args]" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            f'exec agentcodehandoff blocked --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
+        )
+    elif kind == "review":
+        default_to = "hermes" if agent == "codex" else "codex"
+        command = (
+            'if [ "$#" -lt 1 ]; then\n'
+            f'  echo "usage: agentcodehandoff-{agent}-review --summary <text> [extra args]" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            f'exec agentcodehandoff review --from-agent "{agent}" --to-agent "{default_to}" "$@"\n'
+        )
     elif kind == "release":
         command = f'exec agentcodehandoff release --agent "{agent}" "$@"\n'
     elif kind == "send":
@@ -449,7 +516,7 @@ def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
     for agent in ("codex", "hermes"):
-        for kind in ("watch", "read", "auto", "send", "request", "claim", "release"):
+        for kind in ("watch", "read", "auto", "send", "request", "claim", "done", "blocked", "review", "release"):
             path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
             if path.exists() and not force:
                 wrappers.append(path)
@@ -513,12 +580,37 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path) -> str:
         alive = last_poll is not None and (now - last_poll).total_seconds() <= AUTOMATION_STALE_SECONDS
         lines.append(f"- {agent}: {'alive' if alive else 'stale'}")
     lines.append("")
+    lines.append("Workflow")
+    workflow_messages = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review"}
+    ][-RECENT_WORKFLOW_MESSAGES:]
+    if workflow_messages:
+        for message in workflow_messages:
+            lines.append(
+                f"- {message.get('from', '?')} -> {message.get('to', '?')} :: "
+                f"{message.get('role', '')} :: {message.get('summary', '')}"
+            )
+    else:
+        lines.append("- none")
+    lines.append("")
     lines.append("Open claims")
     open_claims = _open_claims(claims)
     if open_claims:
         for claim in open_claims:
             files = ", ".join(str(item) for item in (claim.get("files") or []))
             lines.append(f"- {claim.get('agent', '?')} :: {claim.get('scope', '')} :: {files or 'no files'}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Recently resolved claims")
+    resolved_claims = _resolved_claims(claims)[-4:]
+    if resolved_claims:
+        for claim in resolved_claims:
+            lines.append(
+                f"- {claim.get('agent', '?')} :: {claim.get('scope', '')} :: "
+                f"{claim.get('state', 'released')}"
+            )
     else:
         lines.append("- none")
     lines.append("")
@@ -551,33 +643,43 @@ def cmd_latest(args: argparse.Namespace) -> None:
 
 
 def cmd_send(args: argparse.Namespace) -> None:
-    record = _write_message(
+    record = _send_record(
         args.inbox_path,
-        {
-            "from": args.from_agent,
-            "to": args.to_agent,
-            "role": args.role,
-            "task": args.task,
-            "summary": args.summary,
-            "details": args.details,
-            "files": _split_files(args.files or ""),
-        },
+        from_agent=args.from_agent,
+        to_agent=args.to_agent,
+        role=args.role,
+        task=args.task,
+        summary=args.summary,
+        details=args.details,
+        files=args.files,
     )
     _print_message(record)
 
 
 def cmd_request(args: argparse.Namespace) -> None:
-    record = _write_message(
+    record = _send_record(
         args.inbox_path,
-        {
-            "from": args.from_agent,
-            "to": args.to_agent,
-            "role": args.role,
-            "task": args.task,
-            "summary": args.summary,
-            "details": args.details,
-            "files": _split_files(args.files or ""),
-        },
+        from_agent=args.from_agent,
+        to_agent=args.to_agent,
+        role=args.role,
+        task=args.task,
+        summary=args.summary,
+        details=args.details,
+        files=args.files,
+    )
+    _print_message(record)
+
+
+def _cmd_workflow_message(args: argparse.Namespace) -> None:
+    record = _send_record(
+        args.inbox_path,
+        from_agent=args.from_agent,
+        to_agent=args.to_agent,
+        role=args.role,
+        task=args.task,
+        summary=args.summary,
+        details=args.details,
+        files=args.files,
     )
     _print_message(record)
 
@@ -657,6 +759,19 @@ def cmd_status(args: argparse.Namespace) -> None:
         else:
             print(f"{agent}: waiting")
     print()
+    print("Workflow updates")
+    print()
+    workflow_messages = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"request", "done", "blocked", "review"}
+    ][-args.workflow_limit:]
+    if not workflow_messages:
+        print("none")
+        print()
+    else:
+        for message in workflow_messages:
+            _print_message(message)
+
     print("Open claims")
     print()
     open_claims = [claim for claim in claims if not claim.get("released")]
@@ -683,6 +798,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         print()
         print("none")
         print()
+    print("Recently resolved claims")
+    print()
+    resolved_claims = _resolved_claims(claims)[-args.resolved_limit:]
+    if not resolved_claims:
+        print("none")
+        print()
+    else:
+        for claim in resolved_claims:
+            _print_claim(claim)
 
 
 def cmd_claim(args: argparse.Namespace) -> None:
@@ -694,6 +818,7 @@ def cmd_claim(args: argparse.Namespace) -> None:
         "scope": args.scope,
         "summary": args.summary,
         "files": _split_files(args.files or ""),
+        "state": "open",
         "released": False,
     }
     conflicts = _claim_conflicts(claims, claim)
@@ -710,10 +835,30 @@ def cmd_claims(args: argparse.Namespace) -> None:
     if args.agent:
         claims = [claim for claim in claims if str(claim.get("agent", "")).lower() == args.agent.lower()]
     if not args.all:
-        claims = [claim for claim in claims if not claim.get("released")]
+        claims = _open_claims(claims)
     claims = claims[-args.limit:]
     for claim in claims:
         _print_claim(claim)
+
+
+def cmd_resolve(args: argparse.Namespace) -> None:
+    claims = _read_claims(args.claims_path)
+    updated = False
+    for claim in claims:
+        matches_agent = str(claim.get("agent", "")).lower() == args.agent.lower()
+        matches_scope = args.scope and str(claim.get("scope", "")) == args.scope
+        if matches_agent and (matches_scope or not args.scope) and str(claim.get("state", "open")) == "open":
+            claim["state"] = args.status
+            claim["released"] = True
+            claim["released_at"] = _now_iso()
+            claim["resolved_at"] = claim["released_at"]
+            claim["resolution_note"] = args.note
+            updated = True
+    _write_claims(args.claims_path, claims)
+    if not updated:
+        print("no matching open claims")
+    else:
+        print(f"claims marked {args.status}")
 
 
 def cmd_release(args: argparse.Namespace) -> None:
@@ -723,8 +868,10 @@ def cmd_release(args: argparse.Namespace) -> None:
         matches_agent = str(claim.get("agent", "")).lower() == args.agent.lower()
         matches_scope = args.scope and str(claim.get("scope", "")) == args.scope
         if matches_agent and (matches_scope or not args.scope) and not claim.get("released"):
+            claim["state"] = "released"
             claim["released"] = True
             claim["released_at"] = _now_iso()
+            claim["resolved_at"] = claim["released_at"]
             updated = True
     _write_claims(args.claims_path, claims)
     if not updated:
@@ -977,6 +1124,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", help="show latest handoffs per agent and current claims")
     status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    status_parser.add_argument("--workflow-limit", type=int, default=6)
+    status_parser.add_argument("--resolved-limit", type=int, default=5)
     status_parser.set_defaults(func=cmd_status)
 
     send_parser = subparsers.add_parser("send", help="send an agent handoff")
@@ -998,6 +1147,36 @@ def build_parser() -> argparse.ArgumentParser:
     request_parser.add_argument("--role", default="request")
     request_parser.add_argument("--files", default="", help="comma-separated file list")
     request_parser.set_defaults(func=cmd_request)
+
+    done_parser = subparsers.add_parser("done", help="send a completion update to another agent")
+    done_parser.add_argument("--from-agent", required=True)
+    done_parser.add_argument("--to-agent", required=True)
+    done_parser.add_argument("--summary", required=True)
+    done_parser.add_argument("--details", default="")
+    done_parser.add_argument("--task", default="completed work")
+    done_parser.add_argument("--role", default="done")
+    done_parser.add_argument("--files", default="", help="comma-separated file list")
+    done_parser.set_defaults(func=_cmd_workflow_message)
+
+    blocked_parser = subparsers.add_parser("blocked", help="send a blocked update to another agent")
+    blocked_parser.add_argument("--from-agent", required=True)
+    blocked_parser.add_argument("--to-agent", required=True)
+    blocked_parser.add_argument("--summary", required=True)
+    blocked_parser.add_argument("--details", default="")
+    blocked_parser.add_argument("--task", default="blocked work")
+    blocked_parser.add_argument("--role", default="blocked")
+    blocked_parser.add_argument("--files", default="", help="comma-separated file list")
+    blocked_parser.set_defaults(func=_cmd_workflow_message)
+
+    review_parser = subparsers.add_parser("review", help="send a review-request update to another agent")
+    review_parser.add_argument("--from-agent", required=True)
+    review_parser.add_argument("--to-agent", required=True)
+    review_parser.add_argument("--summary", required=True)
+    review_parser.add_argument("--details", default="")
+    review_parser.add_argument("--task", default="review request")
+    review_parser.add_argument("--role", default="review")
+    review_parser.add_argument("--files", default="", help="comma-separated file list")
+    review_parser.set_defaults(func=_cmd_workflow_message)
 
     route_parser = subparsers.add_parser("route", help="recommend Codex or Hermes for a request")
     route_parser.add_argument("--summary", required=True)
@@ -1029,6 +1208,13 @@ def build_parser() -> argparse.ArgumentParser:
     claims_parser.add_argument("--limit", type=int, default=20)
     claims_parser.add_argument("--all", action="store_true", help="include released claims")
     claims_parser.set_defaults(func=cmd_claims)
+
+    resolve_parser = subparsers.add_parser("resolve", help="close claims with a final state")
+    resolve_parser.add_argument("--agent", required=True)
+    resolve_parser.add_argument("--scope", help="resolve only a specific scope")
+    resolve_parser.add_argument("--status", choices=["completed", "blocked", "abandoned"], required=True)
+    resolve_parser.add_argument("--note", default="", help="optional resolution note")
+    resolve_parser.set_defaults(func=cmd_resolve)
 
     release_parser = subparsers.add_parser("release", help="release claims for an agent")
     release_parser.add_argument("--agent", required=True)
