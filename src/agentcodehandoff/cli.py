@@ -1485,6 +1485,20 @@ def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} ({bucket_text}) | hb {heartbeat_text} | restarts {restart_count}{sweep_text}", width)
 
 
+def _availability_summary_line(home: Path, inbox_path: Path, agent: str, width: int) -> str:
+    availability = _agent_availability(home, inbox_path, agent)
+    available = bool(availability.get("available", True))
+    reason = str(availability.get("reason", "")).strip()
+    override_state = str(availability.get("override_state", "")).strip()
+    note = str(availability.get("override_note", "")).strip()
+    state = "available" if available else "unavailable"
+    detail = reason or override_state or "auto"
+    text = f"{agent}: {state} ({detail})"
+    if note:
+        text += f" | {note}"
+    return _truncate(text, width)
+
+
 def _bridge_command_args(args: argparse.Namespace, agent: str) -> list[str]:
     command = [
         sys.executable,
@@ -1796,10 +1810,19 @@ def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int =
     rows: list[str] = []
     for agent in SUPPORTED_AGENTS:
         status = _supervised_bridge_status(home, inbox_path, agent)
-        unhealthy = not bool(status.get("healthy")) or bool(status.get("failure_class")) or int(status.get("pending_count", 0) or 0) > 0
+        availability = _agent_availability(home, inbox_path, agent)
+        unhealthy = (
+            not bool(status.get("healthy"))
+            or bool(status.get("failure_class"))
+            or int(status.get("pending_count", 0) or 0) > 0
+            or not bool(availability.get("available", True))
+            or str(availability.get("override_state", "")).strip().lower() in {"degraded"}
+        )
         if not unhealthy:
             continue
         rows.append(_bridge_supervision_line(status, width))
+        if not bool(availability.get("available", True)) or str(availability.get("override_state", "")).strip():
+            rows.append(_truncate(f"  availability={str(availability.get('reason', '')).strip() or str(availability.get('override_state', '')).strip() or 'auto'}", width))
         failure_class = str(status.get("failure_class", "")).strip()
         if failure_class:
             rows.append(_truncate(f"  failure={failure_class}", width))
@@ -1834,6 +1857,8 @@ def _render_ops_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessi
             _render_panel("Stale Requests", _ops_request_rows(request_records, right_width - 4, limit=8) or ["No stale requests"], right_width, height=10),
         )
     )
+    lines.append("")
+    lines.extend(_render_panel("Agent Availability", [_availability_summary_line(home, inbox_path, agent, total_width - 4) for agent in SUPPORTED_AGENTS], total_width, height=7))
     lines.append("")
 
     lines.extend(
@@ -2064,6 +2089,8 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     if not bridge_rows:
         bridge_rows = ["No bridge state yet"]
 
+    availability_rows = [_availability_summary_line(home, inbox_path, agent, right_width - 4) for agent in SUPPORTED_AGENTS]
+
     handoff_rows = []
     for agent in SUPPORTED_AGENTS:
         message = latest_by_agent.get(agent)
@@ -2073,9 +2100,13 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
             handoff_rows.append(f"{agent}: waiting")
     summary_row = _merge_columns(
         _render_panel("Auto Bridges", bridge_rows, left_width, height=6),
-        _render_panel("Latest Handoffs", handoff_rows, right_width, height=6),
+        _render_panel("Agent Availability", availability_rows, right_width, height=6),
     )
     lines.extend(summary_row)
+    lines.append("")
+    lines.extend(
+        _render_panel("Latest Handoffs", handoff_rows, total_width, height=8)
+    )
     lines.append("")
 
     workflow_messages = [
@@ -2355,6 +2386,11 @@ def cmd_status(args: argparse.Namespace) -> None:
     print()
     for agent in args.agents:
         _print_bridge_supervision(_supervised_bridge_status(args.home, args.inbox_path, agent))
+    print("Agent availability")
+    print()
+    for agent in args.agents:
+        print(_availability_summary_line(args.home, args.inbox_path, agent, 120))
+    print()
     print("Requests")
     print()
     if not request_records:
