@@ -529,6 +529,7 @@ The current suite covers:
 - `init` and `doctor` against isolated fake Codex, Hermes, and Claude CLIs
 - availability overrides and routing fallback
 - bridge preset persistence for `local-trio`
+- bridge startup validation for missing agent CLIs and non-git repos
 - supervised `local-trio` startup plus an actual Claude bridge reply in an isolated temp repo
 - tracked request resolution
 
@@ -537,6 +538,7 @@ This is the current release-hardening baseline. Before a broad public release, t
 ## Known Limitations
 
 - Agent bridge behavior still depends on the local Codex, Claude, and Hermes CLIs being installed and authenticated in the environment that launches the bridge.
+- Public users should still expect local runtime/environment differences across agent CLIs, but `bridge-start` now fails early for invalid repos and missing agent CLIs instead of deferring that failure to a background process.
 - Real provider/runtime differences can still surface outside the isolated fake-agent test suite.
 - The dashboard is terminal-first and intentionally lightweight; it is not a full graphical control plane.
 - The current test suite is strong on critical paths, but not yet exhaustive across every command combination.

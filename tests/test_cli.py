@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -195,6 +196,23 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             self.assertEqual(profile["repo"], str(self.repo))
             self.assertIn("updated_at", profile)
+
+    def test_bridge_start_rejects_non_git_repo(self) -> None:
+        bad_repo = self.root / "not-a-repo"
+        bad_repo.mkdir(parents=True, exist_ok=True)
+        result = run_cli(["bridge-start", "--agent", "claude", "--repo", str(bad_repo)], env=self.env, cwd=bad_repo)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("repo is not a git repository", result.stderr)
+
+    def test_bridge_start_rejects_missing_agent_cli(self) -> None:
+        env = self.env.copy()
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env["PATH"] = f"{self.bin_dir}:{git_dir}"
+        (self.bin_dir / "claude").unlink()
+        result = run_cli(["bridge-start", "--agent", "claude", "--repo", str(self.repo)], env=env, cwd=self.repo)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("claude CLI is not ready", result.stderr)
+        self.assertIn("agentcodehandoff doctor", result.stderr)
 
     def test_local_trio_starts_and_reports_healthy(self) -> None:
         init = run_cli(["init", "--install-wrappers", "--seed", "--bin-dir", str(self.bin_dir)], env=self.env)

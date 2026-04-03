@@ -1444,6 +1444,39 @@ def _agent_cli_health(agent: str) -> tuple[bool, str]:
     return True, f"{binary} | {first_line or f'exit {result.returncode}'}"
 
 
+def _validate_bridge_repo(repo: Path) -> str | None:
+    repo = Path(repo).expanduser()
+    if not repo.exists():
+        return f"repo does not exist: {repo}"
+    if not repo.is_dir():
+        return f"repo is not a directory: {repo}"
+    git_binary = shutil.which("git")
+    if not git_binary:
+        return "git is not available on PATH. Install git or update PATH before starting bridges."
+    result = subprocess.run(
+        [git_binary, "-C", str(repo), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = ((result.stderr or "").strip() or (result.stdout or "").strip() or "not a git repository")
+        return f"repo is not a git repository: {repo} ({detail})"
+    return None
+
+
+def _validate_bridge_start(agent: str, repo: Path) -> None:
+    repo_error = _validate_bridge_repo(repo)
+    if repo_error:
+        raise SystemExit(repo_error)
+    cli_ok, cli_detail = _agent_cli_health(agent)
+    if not cli_ok:
+        raise SystemExit(
+            f"{agent} CLI is not ready: {cli_detail}. "
+            f"Run `agentcodehandoff doctor` and verify the local {agent} CLI install/auth state."
+        )
+
+
 def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
     last_poll = _parse_iso(str(state.get("last_poll_at", "")).strip())
     last_reply = _parse_iso(str(state.get("last_reply_at", "")).strip())
@@ -3308,6 +3341,7 @@ def cmd_bridge_preset_apply(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_start(args: argparse.Namespace) -> None:
+    _validate_bridge_start(args.agent, args.repo)
     status = _supervised_bridge_status(args.home, args.inbox_path, args.agent)
     if status["alive"]:
         print(f"bridge already running for {args.agent} (pid {status['pid']})")
@@ -3417,6 +3451,7 @@ def cmd_bridge_stop(args: argparse.Namespace) -> None:
 
 
 def cmd_bridge_restart(args: argparse.Namespace) -> None:
+    _validate_bridge_start(args.agent, args.repo)
     restart_event = {
         "timestamp": _now_iso(),
         "type": "restart",
@@ -3467,6 +3502,7 @@ def cmd_bridge_recover(args: argparse.Namespace) -> None:
             or str(args.repo)
         )
         repo = Path(repo_value)
+        _validate_bridge_start(agent, repo)
         common_args = argparse.Namespace(
             home=args.home,
             inbox_path=args.inbox_path,
