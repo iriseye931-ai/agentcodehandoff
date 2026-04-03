@@ -167,6 +167,16 @@ agentcodehandoff restart-team --template local-trio --repo /path/to/repo
 
 The `local-trio` flow has been live-verified with Codex, Hermes, and Claude replying through supervised bridges.
 
+## Visuals
+
+Primary assets in this repo:
+
+- brand mark: `assets/agentcodehandoff-mark.svg`
+- README lockup: `assets/agentcodehandoff-lockup.svg`
+- social preview: `assets/agentcodehandoff-social-preview.svg`
+
+For GitHub repo presentation, use `assets/agentcodehandoff-social-preview.svg` as the social preview image.
+
 For live terminal operations, enable dashboard actions:
 
 ```bash
@@ -804,6 +814,10 @@ Before a broad public release, make sure all of these are true:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
