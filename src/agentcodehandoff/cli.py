@@ -1771,6 +1771,19 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     print()
 
 
+def _bridge_log_path(home: Path, agent: str) -> Path:
+    return home / "logs" / f"{agent}-bridge.log"
+
+
+def _tail_text(path: Path, lines: int) -> list[str]:
+    if not path.exists():
+        return []
+    content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if lines <= 0:
+        return content
+    return content[-lines:]
+
+
 def _conflict_lines(claims: list[dict[str, Any]], width: int, limit: int) -> list[str]:
     lines: list[str] = []
     open_claims = _open_claims(claims)
@@ -3193,6 +3206,26 @@ def cmd_bridge_status(args: argparse.Namespace) -> None:
         _print_bridge_supervision(status)
 
 
+def cmd_logs(args: argparse.Namespace) -> None:
+    agents = args.agents or _default_agents()
+    rendered = False
+    for agent in agents:
+        log_path = _bridge_log_path(args.home, agent)
+        lines = _tail_text(log_path, args.lines)
+        print(f"{agent}: {log_path}")
+        if not log_path.exists():
+            print("  log file not found")
+        elif not lines:
+            print("  log file is empty")
+        else:
+            for line in lines:
+                print(f"  {line}")
+        print()
+        rendered = True
+    if not rendered:
+        print("no bridge logs selected")
+
+
 def cmd_bridge_profiles(args: argparse.Namespace) -> None:
     agents = args.agents or _default_agents()
     profiles = []
@@ -4177,6 +4210,11 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_status_parser = subparsers.add_parser("bridge-status", help="show supervised bridge health, pid, and pending requests")
     bridge_status_parser.add_argument("--agents", nargs="+", default=_default_agents())
     bridge_status_parser.set_defaults(func=cmd_bridge_status)
+
+    logs_parser = subparsers.add_parser("logs", help="tail per-agent supervised bridge logs")
+    logs_parser.add_argument("--agents", nargs="+", default=_default_agents())
+    logs_parser.add_argument("--lines", type=int, default=20, help="number of log lines to show per agent")
+    logs_parser.set_defaults(func=cmd_logs)
 
     bridge_profiles_parser = subparsers.add_parser("bridge-profiles", help="list saved bridge profiles")
     bridge_profiles_parser.add_argument("--agents", nargs="+", default=_default_agents())

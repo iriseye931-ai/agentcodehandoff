@@ -178,6 +178,12 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
         return path
 
+    def write_bridge_log(self, agent: str, text: str) -> Path:
+        path = self.home / "logs" / f"{agent}-bridge.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
     def wait_for_bridge_health(self, agent: str, *, timeout: float = 20.0) -> str:
         deadline = time.time() + timeout
         last_output = ""
@@ -290,6 +296,21 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("removed stale lock", result.stdout)
         self.assertFalse(lock_path.exists())
+
+    def test_logs_shows_tail_for_selected_agent(self) -> None:
+        self.write_bridge_log("claude", "line-1\nline-2\nline-3\n")
+        result = run_cli(["logs", "--agents", "claude", "--lines", "2"], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("claude:", result.stdout)
+        self.assertNotIn("line-1", result.stdout)
+        self.assertIn("line-2", result.stdout)
+        self.assertIn("line-3", result.stdout)
+
+    def test_logs_reports_missing_file(self) -> None:
+        result = run_cli(["logs", "--agents", "hermes", "--lines", "5"], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("hermes:", result.stdout)
+        self.assertIn("log file not found", result.stdout)
 
     def test_bridge_recover_starts_from_saved_profile_without_live_lock(self) -> None:
         self.write_bridge_profile("claude")
