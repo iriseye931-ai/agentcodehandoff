@@ -185,6 +185,7 @@ Keys:
 Inspect supervised bridge health:
 
 ```bash
+agentcodehandoff ps
 agentcodehandoff bridge-status
 agentcodehandoff logs --agents claude --lines 40
 agentcodehandoff bridge-profiles
@@ -534,6 +535,7 @@ The current suite covers:
 - stale lock cleanup and paused-bridge recovery from saved profiles
 - restart-cap pause behavior for supervised bridges
 - per-agent bridge log access
+- compact per-agent team summaries with `ps`
 - supervised `local-trio` startup plus an actual Claude bridge reply in an isolated temp repo
 - tracked request resolution
 

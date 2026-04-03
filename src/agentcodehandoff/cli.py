@@ -1266,6 +1266,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff auto-status "$@"\n'
     elif kind == "status":
         command = 'exec agentcodehandoff status "$@"\n'
+    elif kind == "ps":
+        command = 'exec agentcodehandoff ps "$@"\n'
     elif kind == "requests":
         command = 'exec agentcodehandoff requests "$@"\n'
     elif kind == "request-sweep":
@@ -1389,7 +1391,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "up", "down", "restart-team"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "up", "down", "restart-team"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1990,12 +1992,36 @@ def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int =
         failure_class = str(status.get("failure_class", "")).strip()
         if failure_class:
             rows.append(_truncate(f"  failure={failure_class}", width))
+        last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
+        if last_error:
+            rows.append(_truncate(f"  error={last_error}", width))
         oldest_pending_at = str(status.get("oldest_pending_at", "")).strip()
         if oldest_pending_at:
             rows.append(_truncate(f"  oldest pending={_format_timestamp(oldest_pending_at)}", width))
+        log_path = str(status.get("lock", {}).get("log_path", "")).strip() if isinstance(status.get("lock"), dict) else ""
+        if log_path:
+            rows.append(_truncate(f"  log={Path(log_path).name}", width))
         if len(rows) >= limit:
             break
     return rows[:limit]
+
+
+def _team_summary_line(home: Path, inbox_path: Path, agent: str, width: int) -> str:
+    status = _supervised_bridge_status(home, inbox_path, agent)
+    availability = _agent_availability(home, inbox_path, agent)
+    state = "healthy" if bool(status.get("healthy")) else "paused" if bool(status.get("lock", {}).get("paused", False)) else "down"
+    availability_reason = str(availability.get("reason", "")).strip() or str(availability.get("override_state", "")).strip() or "auto"
+    failure_class = str(status.get("failure_class", "")).strip()
+    last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
+    parts = [f"{agent}: {state}", f"avail={availability_reason}"]
+    if failure_class:
+        parts.append(f"failure={failure_class}")
+    pending_count = int(status.get("pending_count", 0) or 0)
+    if pending_count:
+        parts.append(f"pending={pending_count}")
+    if last_error:
+        parts.append(f"error={last_error}")
+    return _truncate(" | ".join(parts), width)
 
 
 def _render_ops_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_path: Path) -> str:
@@ -2658,6 +2684,11 @@ def cmd_status(args: argparse.Namespace) -> None:
     if not drift_found:
         print("none")
         print()
+
+
+def cmd_ps(args: argparse.Namespace) -> None:
+    for agent in args.agents:
+        print(_team_summary_line(args.home, args.inbox_path, agent, 160))
 
 
 def cmd_claim(args: argparse.Namespace) -> None:
@@ -4353,6 +4384,10 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--sessions-limit", type=int, default=5)
     status_parser.add_argument("--requests-limit", type=int, default=6)
     status_parser.set_defaults(func=cmd_status)
+
+    ps_parser = subparsers.add_parser("ps", help="show a compact per-agent team summary")
+    ps_parser.add_argument("--agents", nargs="+", default=_default_agents())
+    ps_parser.set_defaults(func=cmd_ps)
 
     requests_parser = subparsers.add_parser("requests", help="show request lifecycle state from message history")
     requests_parser.add_argument("--agent", help="filter requests by from/to agent")

@@ -312,6 +312,30 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("hermes:", result.stdout)
         self.assertIn("log file not found", result.stdout)
 
+    def test_ps_shows_compact_team_summary(self) -> None:
+        self.write_bridge_lock(
+            "claude",
+            {
+                "agent": "claude",
+                "pid": 0,
+                "supervisor_pid": 0,
+                "repo": str(self.repo),
+                "paused": True,
+                "failure_class": "auth",
+                "log_path": str(self.home / "logs" / "claude-bridge.log"),
+            },
+        )
+        (self.home / "automation").mkdir(parents=True, exist_ok=True)
+        (self.home / "automation" / "claude.json").write_text(
+            json.dumps({"seen_ids": [], "last_poll_at": "", "last_reply_at": "", "last_error": "Not logged in"}),
+            encoding="utf-8",
+        )
+        result = run_cli(["ps", "--agents", "claude"], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("claude: paused", result.stdout)
+        self.assertIn("failure=auth", result.stdout)
+        self.assertIn("error=Not logged in", result.stdout)
+
     def test_bridge_recover_starts_from_saved_profile_without_live_lock(self) -> None:
         self.write_bridge_profile("claude")
         result = run_cli(["bridge-recover", "--agents", "claude", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
