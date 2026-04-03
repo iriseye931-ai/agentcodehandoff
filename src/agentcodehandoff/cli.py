@@ -832,16 +832,28 @@ def _run_codex_auto(prompt: str, repo: Path) -> dict[str, Any]:
 
 
 def _run_claude_auto(prompt: str, repo: Path) -> dict[str, Any]:
+    schema = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "details": {"type": "string"},
+            "files": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["summary", "details", "files"],
+        "additionalProperties": False,
+    }
     result = subprocess.run(
         [
             str(shutil.which("claude") or "/Users/iris/.local/bin/claude"),
             "-p",
             "--output-format",
-            "text",
+            "json",
             "--permission-mode",
             "bypassPermissions",
             "--system-prompt",
-            "Return JSON only. Do not include markdown fences or extra text.",
+            "You must answer the user prompt and produce structured output that matches the provided JSON schema.",
+            "--json-schema",
+            json.dumps(schema, separators=(",", ":")),
             prompt,
         ],
         cwd=repo,
@@ -849,10 +861,20 @@ def _run_claude_auto(prompt: str, repo: Path) -> dict[str, Any]:
         text=True,
         check=False,
     )
-    combined = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
-    parsed = _extract_json_object(combined)
-    if not parsed:
-        raise RuntimeError(f"claude automation did not return JSON: {combined.strip()[:500]}")
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    if result.returncode != 0:
+        combined = stdout + ("\n" + stderr if stderr else "")
+        raise RuntimeError(f"claude automation failed: {combined.strip()[:500]}")
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        combined = stdout + ("\n" + stderr if stderr else "")
+        raise RuntimeError(f"claude automation did not return valid JSON: {combined.strip()[:500]}") from exc
+    parsed = payload.get("structured_output") if isinstance(payload, dict) else None
+    if not isinstance(parsed, dict):
+        combined = stdout + ("\n" + stderr if stderr else "")
+        raise RuntimeError(f"claude automation missing structured output: {combined.strip()[:500]}")
     return parsed
 
 
