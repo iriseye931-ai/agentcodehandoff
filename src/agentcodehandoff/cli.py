@@ -627,6 +627,65 @@ def _session_suggestions(session: dict[str, Any], drift: dict[str, Any], claims:
     return suggestions
 
 
+def _session_remediations(session: dict[str, Any], drift: dict[str, Any], claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    status = str(drift.get("status", "")).strip()
+    changed_files = [str(item) for item in drift.get("changed_files", [])]
+    unexpected_files = [str(item) for item in drift.get("unexpected_files", [])]
+    claim = drift.get("claim")
+    claim_scope = str(claim.get("scope", "")).strip() if isinstance(claim, dict) else ""
+    session_agent = str(session.get("agent", "")).strip().lower()
+    remediations: list[dict[str, Any]] = []
+
+    if status == "clean":
+        return [{"type": "noop", "message": "Session is clean."}]
+    if status == "aligned":
+        return [{"type": "noop", "message": "All changed files are already within the active claim."}]
+    if status == "missing":
+        return [{"type": "manual", "message": "Worktree is missing. Recreate the session or close it manually."}]
+    if status == "unscoped":
+        return [{"type": "manual", "message": f"Create or link a claim for {', '.join(changed_files[:3]) or 'current changes'}."}]
+
+    owner_actions: list[dict[str, Any]] = []
+    for file_path in unexpected_files:
+        owner_claim = _claim_for_file(claims, file_path, exclude_agent=session_agent)
+        if owner_claim:
+            owner_actions.append(
+                {
+                    "type": "handoff",
+                    "to_agent": str(owner_claim.get("agent", "")).strip(),
+                    "to_scope": str(owner_claim.get("scope", "")).strip(),
+                    "files": [file_path],
+                    "message": f"Handoff {file_path} to {owner_claim.get('agent', '?')} ({owner_claim.get('scope', '')}).",
+                }
+            )
+    if owner_actions:
+        remediations.extend(owner_actions)
+        return remediations
+
+    declared_files = [str(item) for item in (claim.get("files", []) if isinstance(claim, dict) else []) if str(item).strip()]
+    declared_ext = _extension_set(declared_files)
+    unexpected_ext = _extension_set(unexpected_files)
+
+    if unexpected_files and len(unexpected_files) <= 2 and (not declared_ext or unexpected_ext.issubset(declared_ext)) and claim_scope:
+        remediations.append(
+            {
+                "type": "expand-claim",
+                "claim_scope": claim_scope,
+                "files": unexpected_files,
+                "message": f"Expand claim `{claim_scope}` to include {', '.join(unexpected_files[:3])}.",
+            }
+        )
+        return remediations
+
+    remediations.append(
+        {
+            "type": "manual",
+            "message": f"Split {', '.join(unexpected_files[:3]) or 'drifted files'} into a new scope or separate session.",
+        }
+    )
+    return remediations
+
+
 def _filter_messages(messages: list[dict[str, Any]], agent: str | None, limit: int) -> list[dict[str, Any]]:
     if agent:
         needle = agent.strip().lower()
@@ -738,6 +797,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff drift "$@"\n'
     elif kind == "suggest":
         command = 'exec agentcodehandoff suggest "$@"\n'
+    elif kind == "remediate":
+        command = 'exec agentcodehandoff remediate "$@"\n'
     elif kind == "bridge-status":
         command = 'exec agentcodehandoff bridge-status "$@"\n'
     else:
@@ -809,7 +870,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "sessions", "drift", "suggest", "bridge-status"):
+    for kind in ("dashboard", "auto-status", "status", "sessions", "drift", "suggest", "remediate", "bridge-status"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1604,10 +1665,100 @@ def cmd_suggest(args: argparse.Namespace) -> None:
     for session in sessions:
         drift = _session_drift(session, claims)
         suggestions = _session_suggestions(session, drift, claims)
+        remediations = _session_remediations(session, drift, claims)
         print(_session_drift_summary_line(session, drift, 120))
         for suggestion in suggestions:
             print(f"  suggest: {suggestion}")
+        for remediation in remediations:
+            action = str(remediation.get("type", "")).strip()
+            if action and action not in {"noop", "manual"}:
+                print(f"  action: {action}")
         print()
+
+
+def _find_session(sessions: list[dict[str, Any]], *, agent: str, scope: str) -> dict[str, Any] | None:
+    for session in sessions:
+        if str(session.get("agent", "")).lower() == agent.lower() and str(session.get("scope", "")) == scope:
+            return session
+    return None
+
+
+def _expand_claim_files(claims: list[dict[str, Any]], *, agent: str, scope: str, files: list[str]) -> bool:
+    updated = False
+    for claim in claims:
+        if str(claim.get("agent", "")).lower() == agent.lower() and str(claim.get("scope", "")) == scope:
+            existing = [str(item) for item in claim.get("files", []) if str(item).strip()]
+            for file_path in files:
+                if file_path not in existing:
+                    existing.append(file_path)
+                    updated = True
+            claim["files"] = existing
+            if updated:
+                claim["summary"] = str(claim.get("summary", "")).strip() or f"Expanded scope {scope}"
+            break
+    return updated
+
+
+def cmd_remediate(args: argparse.Namespace) -> None:
+    claims = _read_claims(args.claims_path)
+    sessions = _read_sessions(args.sessions_path)
+    session = _find_session(sessions, agent=args.agent, scope=args.scope)
+    if not session:
+        raise SystemExit("no matching session")
+    drift = _session_drift(session, claims)
+    remediations = _session_remediations(session, drift, claims)
+    actionable = [item for item in remediations if str(item.get("type", "")) in {"expand-claim", "handoff"}]
+    if not actionable:
+        for item in remediations:
+            print(item.get("message", "no actionable remediation"))
+        return
+
+    chosen = actionable[0] if args.action == "auto" else next((item for item in actionable if item.get("type") == args.action), None)
+    if not chosen:
+        raise SystemExit(f"requested action {args.action} is not available for this session")
+
+    action_type = str(chosen.get("type", ""))
+    print(f"session: {args.agent}::{args.scope}")
+    print(f"action: {action_type}")
+    print(f"plan: {chosen.get('message', '')}")
+    if args.dry_run:
+        return
+
+    if action_type == "expand-claim":
+        claim_scope = str(chosen.get("claim_scope", "")).strip()
+        files = [str(item) for item in chosen.get("files", []) if str(item).strip()]
+        if not claim_scope or not files:
+            raise SystemExit("expand-claim remediation is missing claim scope or files")
+        updated = _expand_claim_files(claims, agent=args.agent, scope=claim_scope, files=files)
+        if not updated:
+            print("no claim changes were needed")
+            return
+        _write_claims(args.claims_path, claims)
+        print(f"expanded claim {claim_scope} with: {', '.join(files)}")
+        return
+
+    if action_type == "handoff":
+        to_agent = str(chosen.get("to_agent", "")).strip()
+        to_scope = str(chosen.get("to_scope", "")).strip()
+        files = [str(item) for item in chosen.get("files", []) if str(item).strip()]
+        if not to_agent or not files:
+            raise SystemExit("handoff remediation is missing agent or files")
+        summary = f"Drift handoff for {', '.join(files)}"
+        details = f"Session {args.agent}/{args.scope} touched files owned by {to_agent}"
+        if to_scope:
+            details += f" in claim {to_scope}"
+        _send_record(
+            args.inbox_path,
+            from_agent=args.agent,
+            to_agent=to_agent,
+            role="handoff",
+            task="drift remediation",
+            summary=summary,
+            details=details,
+            files=files,
+        )
+        print(f"sent handoff to {to_agent} for: {', '.join(files)}")
+        return
 
 
 def cmd_session_end(args: argparse.Namespace) -> None:
@@ -2346,6 +2497,13 @@ def build_parser() -> argparse.ArgumentParser:
     suggest_parser.add_argument("--limit", type=int, default=20)
     suggest_parser.add_argument("--all", action="store_true", help="include closed sessions")
     suggest_parser.set_defaults(func=cmd_suggest)
+
+    remediate_parser = subparsers.add_parser("remediate", help="apply a safe remediation for session drift")
+    remediate_parser.add_argument("--agent", required=True)
+    remediate_parser.add_argument("--scope", required=True)
+    remediate_parser.add_argument("--action", choices=["auto", "expand-claim", "handoff"], default="auto")
+    remediate_parser.add_argument("--dry-run", action="store_true")
+    remediate_parser.set_defaults(func=cmd_remediate)
 
     session_end_parser = subparsers.add_parser("session-end", help="close an agent worktree session")
     session_end_parser.add_argument("--agent", required=True)
