@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -20,10 +21,12 @@ DEFAULT_CLAIMS_PATH = DEFAULT_HOME / "claims.json"
 DEFAULT_SESSIONS_PATH = DEFAULT_HOME / "sessions.json"
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 DEFAULT_AUTOMATION_STATE_DIR = DEFAULT_HOME / "automation"
+DEFAULT_BRIDGE_STATE_DIR = DEFAULT_HOME / "bridges"
 AUTOMATION_STALE_SECONDS = 30
 DASHBOARD_RECENT_MESSAGES = 8
 RECENT_WORKFLOW_MESSAGES = 6
 TERMINAL_FALLBACK_SIZE = (120, 40)
+BRIDGE_HEARTBEAT_SECONDS = 10
 
 
 def _now_iso() -> str:
@@ -115,6 +118,50 @@ def _read_automation_state(path: Path) -> dict[str, Any]:
 def _write_automation_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def _bridge_lock_path(home: Path, agent: str) -> Path:
+    return home / "bridges" / f"{agent}.json"
+
+
+def _read_bridge_lock(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_bridge_lock(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _remove_bridge_lock(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _signal_pid(pid: int, sig: int) -> bool:
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        return False
+    return True
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -668,6 +715,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff drift "$@"\n'
     elif kind == "suggest":
         command = 'exec agentcodehandoff suggest "$@"\n'
+    elif kind == "bridge-status":
+        command = 'exec agentcodehandoff bridge-status "$@"\n'
     else:
         raise ValueError(f"unsupported generic wrapper kind: {kind}")
     return "#!/usr/bin/env bash\nset -euo pipefail\n" + command
@@ -737,7 +786,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "auto-status", "status", "sessions", "drift", "suggest"):
+    for kind in ("dashboard", "auto-status", "status", "sessions", "drift", "suggest", "bridge-status"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -853,6 +902,95 @@ def _bridge_status_line(agent: str, state: dict[str, Any], width: int) -> str:
     return _truncate(text, width)
 
 
+def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[str, Any]:
+    lock = _read_bridge_lock(_bridge_lock_path(home, agent))
+    pid = int(lock.get("pid", 0) or 0)
+    alive = _pid_alive(pid)
+    heartbeat = _parse_iso(str(lock.get("last_heartbeat_at", "")).strip())
+    now = datetime.now(timezone.utc)
+    healthy = alive and heartbeat is not None and (now - heartbeat).total_seconds() <= BRIDGE_HEARTBEAT_SECONDS
+    automation_state = _read_automation_state(_automation_state_path(home, agent))
+    seen_ids = {str(item) for item in automation_state.get("seen_ids", []) if str(item).strip()}
+    pending = _pending_messages_for_agent(_read_messages(inbox_path), agent, seen_ids)
+    oldest_pending_at = ""
+    if pending:
+        timestamps = [_parse_iso(str(message.get("timestamp", "")).strip()) for message in pending]
+        valid_times = [item for item in timestamps if item is not None]
+        if valid_times:
+            oldest_pending_at = min(valid_times).isoformat()
+    return {
+        "agent": agent,
+        "pid": pid,
+        "alive": alive,
+        "healthy": healthy,
+        "lock": lock,
+        "pending_count": len(pending),
+        "oldest_pending_at": oldest_pending_at,
+        "automation_state": automation_state,
+    }
+
+
+def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
+    agent = str(status.get("agent", "?"))
+    pid = int(status.get("pid", 0) or 0)
+    healthy = bool(status.get("healthy"))
+    pending_count = int(status.get("pending_count", 0) or 0)
+    heartbeat = _parse_iso(str(status.get("lock", {}).get("last_heartbeat_at", "")).strip()) if isinstance(status.get("lock"), dict) else None
+    heartbeat_text = _format_timestamp(heartbeat.isoformat()) if heartbeat else "--:--:--"
+    state = "healthy" if healthy else "down"
+    return _truncate(f"{agent}: {state} | pid {pid or '-'} | pending {pending_count} | hb {heartbeat_text}", width)
+
+
+def _bridge_command_args(args: argparse.Namespace, agent: str) -> list[str]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--home",
+        str(args.home),
+        "--inbox-path",
+        str(args.inbox_path),
+        "--claims-path",
+        str(args.claims_path),
+        "--sessions-path",
+        str(args.sessions_path),
+        "auto",
+        "--agent",
+        agent,
+        "--repo",
+        str(args.repo),
+        "--interval",
+        str(args.interval),
+        "--supervised",
+    ]
+    if args.claim_on_files:
+        command.append("--claim-on-files")
+    if args.verbose:
+        command.append("--verbose")
+    if args.claim_scope_prefix:
+        command.extend(["--claim-scope-prefix", args.claim_scope_prefix])
+    if getattr(args, "log_path", ""):
+        command.extend(["--log-path", str(args.log_path)])
+    return command
+
+
+def _print_bridge_supervision(status: dict[str, Any]) -> None:
+    print(_bridge_supervision_line(status, 120))
+    lock = status.get("lock", {}) if isinstance(status.get("lock"), dict) else {}
+    repo = str(lock.get("repo", "")).strip()
+    if repo:
+        print(f"  repo: {repo}")
+    log_path = str(lock.get("log_path", "")).strip()
+    if log_path:
+        print(f"  log: {log_path}")
+    oldest_pending_at = str(status.get("oldest_pending_at", "")).strip()
+    if oldest_pending_at:
+        print(f"  oldest pending: {_format_timestamp(oldest_pending_at)}")
+    last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
+    if last_error:
+        print(f"  last error: {last_error}")
+    print()
+
+
 def _conflict_lines(claims: list[dict[str, Any]], width: int, limit: int) -> list[str]:
     lines: list[str] = []
     open_claims = _open_claims(claims)
@@ -961,8 +1099,8 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
 
     bridge_rows = []
     for agent in ("codex", "hermes"):
-        state = _read_automation_state(_automation_state_path(home, agent))
-        bridge_rows.append(_bridge_status_line(agent, state, left_width - 4))
+        status = _supervised_bridge_status(home, inbox_path, agent)
+        bridge_rows.append(_bridge_supervision_line(status, left_width - 4))
     if not bridge_rows:
         bridge_rows = ["No bridge state yet"]
 
@@ -1167,6 +1305,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         else:
             print(f"{agent}: waiting")
     print()
+    print("Supervised bridges")
+    print()
+    for agent in args.agents:
+        _print_bridge_supervision(_supervised_bridge_status(args.home, args.inbox_path, agent))
     print("Workflow updates")
     print()
     workflow_messages = [
@@ -1470,69 +1612,114 @@ def cmd_release(args: argparse.Namespace) -> None:
 
 def cmd_auto(args: argparse.Namespace) -> None:
     state_path = _automation_state_path(args.home, args.agent)
+    lock_path = _bridge_lock_path(args.home, args.agent)
     state = _read_automation_state(state_path)
     seen_ids = {str(item) for item in state.get("seen_ids", [])}
+    if args.supervised:
+        existing = _read_bridge_lock(lock_path)
+        existing_pid = int(existing.get("pid", 0) or 0)
+        if existing_pid and existing_pid != os.getpid() and _pid_alive(existing_pid):
+            raise SystemExit(f"another supervised bridge is already active for {args.agent} (pid {existing_pid})")
 
-    while True:
-        state["last_poll_at"] = _now_iso()
-        _write_automation_state(state_path, state)
-        messages = _read_messages(args.inbox_path)
-        pending = _pending_messages_for_agent(messages, args.agent, seen_ids)
-        for message in pending:
-            message_id = str(message.get("id", "")).strip()
-            prompt = _agent_prompt(args.agent, args.repo, message)
-            try:
-                response = _run_auto_agent(args.agent, prompt, args.repo)
-                state["last_error"] = ""
-            except Exception as exc:
+        payload = {
+            "agent": args.agent,
+            "pid": os.getpid(),
+            "repo": str(args.repo),
+            "started_at": _now_iso(),
+            "last_heartbeat_at": _now_iso(),
+            "interval": args.interval,
+            "claim_on_files": bool(args.claim_on_files),
+            "log_path": args.log_path,
+            "mode": "supervised",
+        }
+        _write_bridge_lock(lock_path, payload)
+
+    try:
+        while True:
+            _write_automation_state(state_path, state)
+            if args.supervised:
+                lock = _read_bridge_lock(lock_path)
+                lock.update(
+                    {
+                        "agent": args.agent,
+                        "pid": os.getpid(),
+                        "repo": str(args.repo),
+                        "last_heartbeat_at": _now_iso(),
+                        "interval": args.interval,
+                        "claim_on_files": bool(args.claim_on_files),
+                        "log_path": args.log_path,
+                        "mode": "supervised",
+                    }
+                )
+                if not lock.get("started_at"):
+                    lock["started_at"] = _now_iso()
+                _write_bridge_lock(lock_path, lock)
+
+            state["last_poll_at"] = _now_iso()
+            _write_automation_state(state_path, state)
+            messages = _read_messages(args.inbox_path)
+            pending = _pending_messages_for_agent(messages, args.agent, seen_ids)
+            for message in pending:
+                message_id = str(message.get("id", "")).strip()
+                prompt = _agent_prompt(args.agent, args.repo, message)
+                try:
+                    response = _run_auto_agent(args.agent, prompt, args.repo)
+                    state["last_error"] = ""
+                except Exception as exc:
+                    if args.verbose:
+                        print(f"auto-reply error for {message_id}: {exc}", file=sys.stderr)
+                    state["last_error"] = str(exc)[:500]
+                    seen_ids.add(message_id)
+                    state["seen_ids"] = sorted(seen_ids)
+                    _write_automation_state(state_path, state)
+                    continue
+
+                summary = str(response.get("summary", "")).strip() or f"{args.agent} reply"
+                details = str(response.get("details", "")).strip()
+                files = response.get("files") if isinstance(response.get("files"), list) else []
+                normalized_files = [str(item) for item in files if str(item).strip()]
+                if args.claim_on_files and normalized_files:
+                    claims = _read_claims(args.claims_path)
+                    scope = f"{args.claim_scope_prefix}{message_id}"
+                    claim = {
+                        "id": f"claim-{datetime.now(timezone.utc).timestamp():.6f}",
+                        "timestamp": _now_iso(),
+                        "agent": args.agent,
+                        "scope": scope,
+                        "summary": summary,
+                        "files": normalized_files,
+                        "released": False,
+                    }
+                    claims.append(claim)
+                    _write_claims(args.claims_path, claims)
+                record = _write_message(
+                    args.inbox_path,
+                    {
+                        "from": args.agent,
+                        "to": str(message.get("from", "")).strip() or "codex",
+                        "role": "handoff",
+                        "task": str(message.get("task", "")).strip() or "auto-response",
+                        "summary": summary,
+                        "details": details,
+                        "files": normalized_files,
+                    },
+                )
                 if args.verbose:
-                    print(f"auto-reply error for {message_id}: {exc}", file=sys.stderr)
-                state["last_error"] = str(exc)[:500]
+                    _print_message(record)
                 seen_ids.add(message_id)
                 state["seen_ids"] = sorted(seen_ids)
+                state["last_reply_at"] = _now_iso()
                 _write_automation_state(state_path, state)
-                continue
 
-            summary = str(response.get("summary", "")).strip() or f"{args.agent} reply"
-            details = str(response.get("details", "")).strip()
-            files = response.get("files") if isinstance(response.get("files"), list) else []
-            normalized_files = [str(item) for item in files if str(item).strip()]
-            if args.claim_on_files and normalized_files:
-                claims = _read_claims(args.claims_path)
-                scope = f"{args.claim_scope_prefix}{message_id}"
-                claim = {
-                    "id": f"claim-{datetime.now(timezone.utc).timestamp():.6f}",
-                    "timestamp": _now_iso(),
-                    "agent": args.agent,
-                    "scope": scope,
-                    "summary": summary,
-                    "files": normalized_files,
-                    "released": False,
-                }
-                claims.append(claim)
-                _write_claims(args.claims_path, claims)
-            record = _write_message(
-                args.inbox_path,
-                {
-                    "from": args.agent,
-                    "to": str(message.get("from", "")).strip() or "codex",
-                    "role": "handoff",
-                    "task": str(message.get("task", "")).strip() or "auto-response",
-                    "summary": summary,
-                    "details": details,
-                    "files": normalized_files,
-                },
-            )
-            if args.verbose:
-                _print_message(record)
-            seen_ids.add(message_id)
-            state["seen_ids"] = sorted(seen_ids)
-            state["last_reply_at"] = _now_iso()
-            _write_automation_state(state_path, state)
-
-        if args.once:
-            return
-        time.sleep(args.interval)
+            if args.once:
+                return
+            time.sleep(args.interval)
+    finally:
+        if args.supervised:
+            current = _read_bridge_lock(lock_path)
+            current_pid = int(current.get("pid", 0) or 0)
+            if current_pid == os.getpid():
+                _remove_bridge_lock(lock_path)
 
 
 def cmd_auto_status(args: argparse.Namespace) -> None:
@@ -1541,6 +1728,105 @@ def cmd_auto_status(args: argparse.Namespace) -> None:
     for agent in args.agents:
         state = _read_automation_state(_automation_state_path(args.home, agent))
         _print_bridge_state(agent, state)
+
+
+def cmd_bridge_status(args: argparse.Namespace) -> None:
+    print("Supervised bridges")
+    print()
+    for agent in args.agents:
+        status = _supervised_bridge_status(args.home, args.inbox_path, agent)
+        _print_bridge_supervision(status)
+
+
+def cmd_bridge_start(args: argparse.Namespace) -> None:
+    status = _supervised_bridge_status(args.home, args.inbox_path, args.agent)
+    if status["alive"]:
+        print(f"bridge already running for {args.agent} (pid {status['pid']})")
+        return
+
+    logs_dir = args.home / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f"{args.agent}-bridge.log"
+    args.log_path = str(log_path)
+    log_handle = log_path.open("a", encoding="utf-8")
+    command = _bridge_command_args(args, args.agent)
+    process = subprocess.Popen(
+        command,
+        cwd=args.repo,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        text=True,
+    )
+    log_handle.close()
+    _write_bridge_lock(
+        _bridge_lock_path(args.home, args.agent),
+        {
+            "agent": args.agent,
+            "pid": process.pid,
+            "repo": str(args.repo),
+            "started_at": _now_iso(),
+            "last_heartbeat_at": "",
+            "interval": args.interval,
+            "claim_on_files": bool(args.claim_on_files),
+            "log_path": str(log_path),
+            "mode": "supervised",
+        },
+    )
+    print(f"started {args.agent} bridge")
+    print(f"pid: {process.pid}")
+    print(f"log: {log_path}")
+
+
+def cmd_bridge_stop(args: argparse.Namespace) -> None:
+    lock_path = _bridge_lock_path(args.home, args.agent)
+    lock = _read_bridge_lock(lock_path)
+    pid = int(lock.get("pid", 0) or 0)
+    if not pid:
+        print("no supervised bridge lock found")
+        return
+    if not _pid_alive(pid):
+        _remove_bridge_lock(lock_path)
+        print("bridge process was not running; removed stale lock")
+        return
+    _signal_pid(pid, signal.SIGTERM)
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        if not _pid_alive(pid):
+            _remove_bridge_lock(lock_path)
+            print(f"stopped {args.agent} bridge")
+            return
+        time.sleep(0.2)
+    if args.force:
+        _signal_pid(pid, signal.SIGKILL)
+        time.sleep(0.2)
+        _remove_bridge_lock(lock_path)
+        print(f"killed {args.agent} bridge")
+        return
+    raise SystemExit(f"bridge {args.agent} did not stop within {args.timeout:.1f}s; rerun with --force")
+
+
+def cmd_bridge_restart(args: argparse.Namespace) -> None:
+    stop_args = argparse.Namespace(
+        home=args.home,
+        agent=args.agent,
+        timeout=args.timeout,
+        force=True,
+    )
+    cmd_bridge_stop(stop_args)
+    start_args = argparse.Namespace(
+        home=args.home,
+        inbox_path=args.inbox_path,
+        claims_path=args.claims_path,
+        sessions_path=args.sessions_path,
+        repo=args.repo,
+        agent=args.agent,
+        interval=args.interval,
+        claim_on_files=args.claim_on_files,
+        claim_scope_prefix=args.claim_scope_prefix,
+        verbose=args.verbose,
+    )
+    cmd_bridge_start(start_args)
 
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
@@ -1691,11 +1977,42 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--verbose", action="store_true")
     auto_parser.add_argument("--claim-on-files", action="store_true", help="create a claim automatically when the agent reply includes files")
     auto_parser.add_argument("--claim-scope-prefix", default="auto-", help="scope prefix used for auto-generated claims")
+    auto_parser.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
+    auto_parser.add_argument("--log-path", default="", help=argparse.SUPPRESS)
     auto_parser.set_defaults(func=cmd_auto)
 
     auto_status_parser = subparsers.add_parser("auto-status", help="show whether Codex and Hermes auto bridges appear alive")
     auto_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
     auto_status_parser.set_defaults(func=cmd_auto_status)
+
+    bridge_status_parser = subparsers.add_parser("bridge-status", help="show supervised bridge health, pid, and pending requests")
+    bridge_status_parser.add_argument("--agents", nargs="+", default=["codex", "hermes"])
+    bridge_status_parser.set_defaults(func=cmd_bridge_status)
+
+    bridge_start_parser = subparsers.add_parser("bridge-start", help="start a supervised background bridge for an agent")
+    bridge_start_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_start_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for the bridge")
+    bridge_start_parser.add_argument("--interval", type=float, default=2.0)
+    bridge_start_parser.add_argument("--claim-on-files", action="store_true")
+    bridge_start_parser.add_argument("--claim-scope-prefix", default="auto-")
+    bridge_start_parser.add_argument("--verbose", action="store_true")
+    bridge_start_parser.set_defaults(func=cmd_bridge_start)
+
+    bridge_stop_parser = subparsers.add_parser("bridge-stop", help="stop a supervised background bridge for an agent")
+    bridge_stop_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_stop_parser.add_argument("--timeout", type=float, default=3.0)
+    bridge_stop_parser.add_argument("--force", action="store_true")
+    bridge_stop_parser.set_defaults(func=cmd_bridge_stop)
+
+    bridge_restart_parser = subparsers.add_parser("bridge-restart", help="restart a supervised background bridge for an agent")
+    bridge_restart_parser.add_argument("--agent", required=True, choices=["codex", "hermes"])
+    bridge_restart_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for the bridge")
+    bridge_restart_parser.add_argument("--interval", type=float, default=2.0)
+    bridge_restart_parser.add_argument("--claim-on-files", action="store_true")
+    bridge_restart_parser.add_argument("--claim-scope-prefix", default="auto-")
+    bridge_restart_parser.add_argument("--verbose", action="store_true")
+    bridge_restart_parser.add_argument("--timeout", type=float, default=3.0)
+    bridge_restart_parser.set_defaults(func=cmd_bridge_restart)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="render a live terminal dashboard for handoffs, claims, and bridge health")
     dashboard_parser.add_argument("--interval", type=float, default=2.0)

@@ -42,6 +42,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 - Claim resolution with final states like `completed`, `blocked`, and `abandoned`
 - Git worktree-backed agent sessions for isolated edit space
 - File-awareness checks that compare live session edits to claimed files
+- Supervised bridge lifecycle commands with pid, heartbeat, and pending request visibility
 - Terminal-first workflow for two or more agents in one repo
 - Paneled terminal dashboard for bridge health, workflow, claims, conflicts, and recent messages
 - Local-first state with no daemon required
@@ -93,6 +94,19 @@ Check whether the bridges appear alive:
 
 ```bash
 agentcodehandoff auto-status
+```
+
+Start supervised background bridges:
+
+```bash
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo
+agentcodehandoff bridge-start --agent hermes --repo /path/to/repo
+```
+
+Inspect supervised bridge health:
+
+```bash
+agentcodehandoff bridge-status
 ```
 
 Open the live terminal dashboard:
@@ -229,6 +243,7 @@ agentcodehandoff claims
 agentcodehandoff sessions
 agentcodehandoff drift
 agentcodehandoff suggest
+agentcodehandoff bridge-status
 agentcodehandoff resolve --agent codex --scope cli-pass --status completed
 ```
 
@@ -252,6 +267,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-sessions`
 - `agentcodehandoff-drift`
 - `agentcodehandoff-suggest`
+- `agentcodehandoff-bridge-status`
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-codex-read`
@@ -359,6 +375,27 @@ Notes:
 - the auto bridge only replies to messages addressed to that agent
 - auto bridges only respond to `request`, `task`, and `auto-request` roles
 - plain `handoff` messages are informational and do not auto-trigger replies
+
+## Bridge Supervision
+
+Supervised bridges let the tool keep automation running without constant manual babysitting.
+
+What supervision adds:
+
+- one managed background bridge per agent
+- pid and heartbeat tracking
+- pending request visibility
+- log file paths for bridge output
+- lifecycle commands to start, stop, restart, and inspect bridges
+
+Core commands:
+
+```bash
+agentcodehandoff bridge-start --agent codex --repo /path/to/repo
+agentcodehandoff bridge-stop --agent codex
+agentcodehandoff bridge-restart --agent codex --repo /path/to/repo
+agentcodehandoff bridge-status
+```
 
 ## Smart Routing
 
