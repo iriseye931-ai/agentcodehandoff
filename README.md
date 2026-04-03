@@ -154,6 +154,9 @@ Keys:
 - `a` apply the top safe ops action
 - `r` recover bridges
 - `s` sweep stale requests
+- `p` approve the top actionable request resolution
+- `c` close the top actionable request resolution
+- `e` escalate the top actionable request resolution
 - `q` quit
 
 Inspect supervised bridge health:

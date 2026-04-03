@@ -1895,6 +1895,13 @@ def _ops_actions(home: Path, inbox_path: Path, claims_path: Path, sessions_path:
     return actions
 
 
+def _top_request_resolution_action(home: Path, inbox_path: Path, claims_path: Path, sessions_path: Path) -> dict[str, Any] | None:
+    for action in _ops_actions(home, inbox_path, claims_path, sessions_path):
+        if str(action.get("kind", "")).strip() == "request-resolve":
+            return action
+    return None
+
+
 def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int = 8) -> list[str]:
     rows: list[str] = []
     for agent in SUPPORTED_AGENTS:
@@ -1965,7 +1972,7 @@ def _render_ops_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessi
     recent_rows = [_message_summary_line(message, total_width - 4) for message in urgent_messages] or ["No urgent workflow events"]
     lines.extend(_render_panel("Urgent Workflow", recent_rows, total_width, height=10))
     lines.append("")
-    lines.append("Keys: [a] apply top ops action  [r] recover bridges  [s] sweep requests  [q] quit")
+    lines.append("Keys: [a] apply top ops action  [r] recover bridges  [s] sweep requests  [p] approve  [c] close  [e] escalate  [q] quit")
     lines.append("Ctrl-C to exit")
     return "\n".join(lines)
 
@@ -2262,7 +2269,7 @@ def _render_dashboard(home: Path, inbox_path: Path, claims_path: Path, sessions_
     recent_rows = recent_rows or ["No messages yet"]
     lines.extend(_render_panel("Recent Messages", recent_rows, total_width, height=min(14, max(8, size.lines - 28))))
     lines.append("")
-    lines.append("Keys: [q] quit  [a] top ops action  [r] recover bridges  [s] sweep requests")
+    lines.append("Keys: [q] quit  [a] top ops action  [r] recover bridges  [s] sweep requests  [p/c/e] resolve request")
     lines.append("Ctrl-C to exit")
     return "\n".join(lines)
 
@@ -3793,6 +3800,24 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
         return body
 
     def run_action(key: str) -> str:
+        if key in {"p", "c", "e"}:
+            action = _top_request_resolution_action(args.home, args.inbox_path, args.claims_path, args.sessions_path)
+            if not action:
+                return "no actionable request resolution available"
+            resolve_action = {"p": "approve", "c": "close", "e": "escalate"}[key]
+            action_args = argparse.Namespace(
+                inbox_path=args.inbox_path,
+                request_id=str(action.get("request_id", "")).strip(),
+                action=resolve_action,
+                from_agent="",
+                to_agent="",
+                summary="",
+                details="",
+                task="",
+            )
+            with io.StringIO() as buffer, contextlib.redirect_stdout(buffer):
+                cmd_request_resolve(action_args)
+                return buffer.getvalue().strip() or f"request {resolve_action}d"
         if key == "r":
             action_args = argparse.Namespace(
                 home=args.home,
@@ -3878,7 +3903,7 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
             key = sys.stdin.read(1)
             if key == "q":
                 return
-            if key in {"a", "r", "s"}:
+            if key in {"a", "r", "s", "p", "c", "e"}:
                 try:
                     last_notice = run_action(key)
                 except SystemExit as exc:
