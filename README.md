@@ -803,6 +803,7 @@ Before a broad public release, make sure all of these are true:
 
 - `python3 -m unittest discover -s tests -v` passes
 - `python3 -m py_compile src/agentcodehandoff/cli.py tests/test_cli.py` passes
+- GitHub Actions CI is green
 - `install.sh` works on a fresh machine/user profile
 - `doctor` gives actionable output for missing CLIs and invalid repos
 - `up --template local-trio` and `down --template local-trio --force` are verified in a disposable repo
