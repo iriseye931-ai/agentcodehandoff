@@ -15,8 +15,8 @@ authors = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/iriseye931-ai/agents-inbox"
-Repository = "https://github.com/iriseye931-ai/agents-inbox"
+Homepage = "https://github.com/iriseye931-ai/agentcodehandoff"
+Repository = "https://github.com/iriseye931-ai/agentcodehandoff"
 
 [project.scripts]
 agentcodehandoff = "agentcodehandoff.cli:main"
