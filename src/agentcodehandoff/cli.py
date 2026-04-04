@@ -1553,6 +1553,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff up "$@"\n'
     elif kind == "quickstart":
         command = 'exec agentcodehandoff quickstart "$@"\n'
+    elif kind == "agent-check":
+        command = 'exec agentcodehandoff agent-check "$@"\n'
     elif kind == "down":
         command = 'exec agentcodehandoff down "$@"\n'
     elif kind == "restart-team":
@@ -1569,6 +1571,8 @@ def _wrapper_script(kind: str, agent: str) -> str:
         command = f'exec agentcodehandoff read --agent "{agent}" "$@"\n'
     elif kind == "auto":
         command = f'exec agentcodehandoff auto --agent "{agent}" "$@"\n'
+    elif kind == "check":
+        command = f'exec agentcodehandoff agent-check --agent "{agent}" "$@"\n'
     elif kind == "request":
         default_to = _default_peer(agent)
         command = (
@@ -1626,7 +1630,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "ops-next", "auto-status", "events", "request-trace", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "up", "down", "restart-team"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "events", "request-trace", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "agent-check", "up", "down", "restart-team"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1643,7 +1647,7 @@ def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
         path.chmod(0o755)
         wrappers.append(path)
     for agent in SUPPORTED_AGENTS:
-        for kind in ("watch", "read", "auto", "send", "request", "claim", "done", "blocked", "review", "release"):
+        for kind in ("watch", "read", "auto", "check", "send", "request", "claim", "done", "blocked", "review", "release"):
             path = bin_dir / f"agentcodehandoff-{agent}-{kind}"
             if path.exists() and not force:
                 wrappers.append(path)
@@ -1674,6 +1678,8 @@ def _failure_hint(agent: str, failure_class: str, last_error: str = "") -> str:
         return f"Inspect `agentcodehandoff logs --agents {agent} --lines 40`, fix the underlying cause, then force recovery."
     if "not logged in" in error_text:
         return f"The local {agent} CLI is installed but not authenticated in this runtime. Re-authenticate it and recover the bridge."
+    if '"loggedin": false' in error_text or '"authmethod": "none"' in error_text:
+        return f"The local {agent} CLI reports no active login in this runtime. Re-authenticate it and recover the bridge."
     if "apiconnectionerror" in error_text or "connection error" in error_text:
         if agent == "hermes":
             return "Hermes can reach the CLI but not its configured provider. Verify the configured endpoint/model, then rerun `agentcodehandoff bridge-recover --agents hermes --force`."
@@ -1715,6 +1721,18 @@ def _agent_runtime_health(agent: str, repo: Path) -> tuple[bool, str] | None:
     if agent == "hermes":
         return _hermes_runtime_health(repo)
     return None
+
+
+def _agent_check_prompt(agent: str) -> str:
+    if agent == "claude":
+        return "Return JSON only with summary \"ok\", details \"claude bridge path ok\", and files []."
+    if agent == "hermes":
+        return "Return JSON only with summary \"ok\", details \"hermes bridge path ok\", and files []."
+    if agent == "openclaw":
+        return "Return JSON only with summary \"ok\", details \"openclaw bridge path ok\", and files []."
+    if agent == "codex":
+        return "Return JSON only with summary \"ok\", details \"codex bridge path ok\", and files []."
+    return "Return JSON only with summary \"ok\", details \"bridge path ok\", and files []."
 
 
 def _validate_bridge_repo(repo: Path) -> str | None:
@@ -4582,6 +4600,32 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print("Core setup is usable. Optional PATH and wrapper issues are warnings, not blockers.")
 
 
+def cmd_agent_check(args: argparse.Namespace) -> None:
+    cli_ok, cli_detail = _agent_cli_health(args.agent)
+    _print_check("OK" if cli_ok else "FAIL", f"{args.agent} CLI ready", cli_detail)
+    if not cli_ok:
+        print(f"      hint: {_failure_hint(args.agent, '', cli_detail)}")
+        raise SystemExit(1)
+
+    runtime_health = _agent_runtime_health(args.agent, args.repo)
+    if runtime_health is not None:
+        runtime_ok, runtime_detail = runtime_health
+        _print_check("OK" if runtime_ok else "FAIL", f"{args.agent} runtime ready", _summarize_error(runtime_detail, 220))
+        if not runtime_ok:
+            print(f"      hint: {_failure_hint(args.agent, '', runtime_detail)}")
+            raise SystemExit(1)
+
+    try:
+        result = _run_auto_agent(args.agent, _agent_check_prompt(args.agent), args.repo)
+    except Exception as exc:
+        detail = str(exc)
+        _print_check("FAIL", f"{args.agent} bridge invocation", _summarize_error(detail, 220))
+        print(f"      hint: {_failure_hint(args.agent, _classify_error(detail), detail)}")
+        raise SystemExit(1)
+
+    _print_check("OK", f"{args.agent} bridge invocation", _summarize_error(json.dumps(result, ensure_ascii=True), 220))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Shared inbox and claim board for coding agents")
     parser.add_argument("--home", type=Path, default=DEFAULT_HOME, help=f"state directory (default: ${ENV_HOME} or ~/.agentcodehandoff)")
@@ -4601,6 +4645,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="verify local setup and wrapper installation")
     doctor_parser.add_argument("--bin-dir", type=Path, default=DEFAULT_BIN_DIR, help="wrapper install directory")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    agent_check_parser = subparsers.add_parser("agent-check", help="run a deeper per-agent bridge readiness check")
+    agent_check_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)
+    agent_check_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for bridge-style invocation checks")
+    agent_check_parser.set_defaults(func=cmd_agent_check)
 
     quickstart_parser = subparsers.add_parser("quickstart", help="run the golden-path local setup and optionally start a team")
     quickstart_parser.add_argument("--agents", nargs="+", default=_default_agents())
