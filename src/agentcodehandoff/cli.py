@@ -1406,6 +1406,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff availability-set "$@"\n'
     elif kind == "up":
         command = 'exec agentcodehandoff up "$@"\n'
+    elif kind == "quickstart":
+        command = 'exec agentcodehandoff quickstart "$@"\n'
     elif kind == "down":
         command = 'exec agentcodehandoff down "$@"\n'
     elif kind == "restart-team":
@@ -1479,7 +1481,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "up", "down", "restart-team"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "up", "down", "restart-team"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -3700,6 +3702,54 @@ def cmd_up(args: argparse.Namespace) -> None:
     cmd_bridge_preset_apply(apply_args)
 
 
+def cmd_quickstart(args: argparse.Namespace) -> None:
+    init_args = argparse.Namespace(
+        home=args.home,
+        inbox_path=args.inbox_path,
+        claims_path=args.claims_path,
+        sessions_path=args.sessions_path,
+        agents=args.agents or _default_agents(),
+        seed=args.seed,
+        install_wrappers=True,
+        force=args.force,
+        bin_dir=args.bin_dir,
+    )
+    cmd_init(init_args)
+    print()
+
+    doctor_args = argparse.Namespace(
+        home=args.home,
+        inbox_path=args.inbox_path,
+        claims_path=args.claims_path,
+        sessions_path=args.sessions_path,
+        bin_dir=args.bin_dir,
+    )
+    cmd_doctor(doctor_args)
+    print()
+
+    if args.start_team:
+        up_args = argparse.Namespace(
+            home=args.home,
+            inbox_path=args.inbox_path,
+            claims_path=args.claims_path,
+            sessions_path=args.sessions_path,
+            template=args.template,
+            agents=args.agents,
+            start=True,
+            repo=args.repo,
+            verbose=args.verbose,
+            timeout=args.timeout,
+        )
+        cmd_up(up_args)
+        print()
+
+    print("next:")
+    print(f"  agentcodehandoff dashboard --view ops --interactive")
+    print(f"  agentcodehandoff ps")
+    print(f"  agentcodehandoff requests")
+    print(f"  agentcodehandoff request --from-agent codex --to-agent hermes --summary \"Need help\" --details \"Reply automatically with a short acknowledgement.\" --files README.md")
+
+
 def cmd_down(args: argparse.Namespace) -> None:
     payload = _resolve_preset(args.home, args.repo, args.template)
     agents_block = payload.get("agents", {})
@@ -4260,6 +4310,20 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="verify local setup and wrapper installation")
     doctor_parser.add_argument("--bin-dir", type=Path, default=DEFAULT_BIN_DIR, help="wrapper install directory")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    quickstart_parser = subparsers.add_parser("quickstart", help="run the golden-path local setup and optionally start a team")
+    quickstart_parser.add_argument("--agents", nargs="+", default=_default_agents())
+    quickstart_parser.add_argument("--seed", action="store_true", default=True, help=argparse.SUPPRESS)
+    quickstart_parser.add_argument("--no-seed", dest="seed", action="store_false", help="skip bootstrap inbox messages")
+    quickstart_parser.add_argument("--force", action="store_true", help="overwrite existing wrapper scripts")
+    quickstart_parser.add_argument("--bin-dir", type=Path, default=DEFAULT_BIN_DIR, help="wrapper install directory")
+    quickstart_parser.add_argument("--template", default="local-trio", help="team template or preset to start")
+    quickstart_parser.add_argument("--repo", type=Path, default=Path.cwd(), help="repo working directory for team startup")
+    quickstart_parser.add_argument("--start-team", action="store_true", default=True, help=argparse.SUPPRESS)
+    quickstart_parser.add_argument("--no-start-team", dest="start_team", action="store_false", help="stop after setup and doctor without starting a team")
+    quickstart_parser.add_argument("--verbose", action="store_true")
+    quickstart_parser.add_argument("--timeout", type=float, default=3.0)
+    quickstart_parser.set_defaults(func=cmd_quickstart)
 
     auto_parser = subparsers.add_parser("auto", help="watch the inbox and auto-reply using a local agent CLI")
     auto_parser.add_argument("--agent", required=True, choices=SUPPORTED_AGENTS)

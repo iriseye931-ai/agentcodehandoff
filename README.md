@@ -98,6 +98,39 @@ This repo is no longer just a shared inbox prototype. The current build supports
 - explicit availability overrides for rate-limited or offline agents
 - live trio verification with Codex, Hermes, and Claude
 
+## First 5 Minutes
+
+If you want the fastest path from clone to real collaboration, use the golden path:
+
+```bash
+agentcodehandoff quickstart --repo /path/to/repo
+```
+
+That will:
+
+- initialize local state
+- install wrappers
+- run setup checks
+- start the default supervised local trio
+- print the next commands to use
+
+Then open the operator view:
+
+```bash
+agentcodehandoff dashboard --view ops --interactive
+```
+
+And send one real request:
+
+```bash
+agentcodehandoff request \
+  --from-agent codex \
+  --to-agent hermes \
+  --summary "Need help" \
+  --details "Reply automatically with a short acknowledgement." \
+  --files README.md
+```
+
 ## Public Alpha Verification
 
 The current build has been verified against the real local toolchain, not just isolated tests.
@@ -129,6 +162,12 @@ The product story is intentionally simple:
 - AgentCodeHandoff makes them coordinate
 
 That keeps the tool lightweight, local, and practical for real engineering workflows.
+
+## Architecture
+
+<p align="center">
+  <img src="assets/agentcodehandoff-architecture.svg" alt="AgentCodeHandoff architecture" width="920" />
+</p>
 
 ## Quick Start
 
@@ -644,6 +683,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-remediate`
 - `agentcodehandoff-availability`
 - `agentcodehandoff-availability-set`
+- `agentcodehandoff-quickstart`
 - `agentcodehandoff-up`
 - `agentcodehandoff-down`
 - `agentcodehandoff-restart-team`

@@ -1,0 +1,59 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="900" fill="#08111B"/>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0D1A28"/>
+      <stop offset="100%" stop-color="#0A1420"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5EE7FF"/>
+      <stop offset="100%" stop-color="#9AF7D9"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <text x="800" y="88" text-anchor="middle" fill="#E9F7FF" font-family="Menlo, Monaco, monospace" font-size="42">AgentCodeHandoff Architecture</text>
+  <text x="800" y="126" text-anchor="middle" fill="#8FB0C2" font-family="Menlo, Monaco, monospace" font-size="20">Bring-your-own local agents coordinated through one local control plane</text>
+
+  <rect x="585" y="260" width="430" height="300" rx="28" fill="url(#panel)" stroke="#63DFFF" stroke-width="3"/>
+  <circle cx="800" cy="355" r="56" fill="#0D2230" stroke="#A7FBFF" stroke-width="3"/>
+  <circle cx="800" cy="355" r="18" fill="url(#core)" filter="url(#glow)"/>
+  <text x="800" y="445" text-anchor="middle" fill="#F3FBFF" font-family="Menlo, Monaco, monospace" font-size="30">AgentCodeHandoff</text>
+  <text x="800" y="482" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="18">handoffs • routing • supervision • recovery</text>
+  <text x="800" y="512" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="18">requests • claims • drift • ops dashboard</text>
+
+  <rect x="90" y="210" width="270" height="130" rx="22" fill="url(#panel)" stroke="#63DFFF" stroke-width="2"/>
+  <text x="225" y="258" text-anchor="middle" fill="#F3FBFF" font-family="Menlo, Monaco, monospace" font-size="30">Codex</text>
+  <text x="225" y="296" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">local CLI</text>
+  <text x="225" y="324" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">its own auth/runtime</text>
+
+  <rect x="90" y="520" width="270" height="130" rx="22" fill="url(#panel)" stroke="#63DFFF" stroke-width="2"/>
+  <text x="225" y="568" text-anchor="middle" fill="#F3FBFF" font-family="Menlo, Monaco, monospace" font-size="30">Hermes</text>
+  <text x="225" y="606" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">local CLI</text>
+  <text x="225" y="634" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">its own auth/runtime</text>
+
+  <rect x="1240" y="210" width="270" height="130" rx="22" fill="url(#panel)" stroke="#63DFFF" stroke-width="2"/>
+  <text x="1375" y="258" text-anchor="middle" fill="#F3FBFF" font-family="Menlo, Monaco, monospace" font-size="30">Claude Code</text>
+  <text x="1375" y="296" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">local CLI</text>
+  <text x="1375" y="324" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">its own auth/runtime</text>
+
+  <rect x="1240" y="520" width="270" height="130" rx="22" fill="url(#panel)" stroke="#63DFFF" stroke-width="2"/>
+  <text x="1375" y="568" text-anchor="middle" fill="#F3FBFF" font-family="Menlo, Monaco, monospace" font-size="30">OpenClaw</text>
+  <text x="1375" y="606" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">local CLI / gateway</text>
+  <text x="1375" y="634" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="17">its own auth/runtime</text>
+
+  <path d="M360 275H585" stroke="#63DFFF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M360 585H585" stroke="#63DFFF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M1015 275H1240" stroke="#63DFFF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M1015 585H1240" stroke="#63DFFF" stroke-width="3" stroke-linecap="round"/>
+
+  <rect x="420" y="720" width="760" height="110" rx="18" fill="#0B1824" stroke="#29485B" stroke-width="2"/>
+  <text x="800" y="768" text-anchor="middle" fill="#F3FBFF" font-family="Menlo, Monaco, monospace" font-size="24">No hosted harness. No subscription proxy. Just local coordination.</text>
+  <text x="800" y="804" text-anchor="middle" fill="#96B8C8" font-family="Menlo, Monaco, monospace" font-size="18">Each tool stays separate. AgentCodeHandoff is the collaboration layer in the middle.</text>
+</svg>

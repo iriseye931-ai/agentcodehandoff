@@ -246,6 +246,18 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("OK    claude CLI ready", doctor.stdout)
         self.assertIn("OK    openclaw CLI ready", doctor.stdout)
 
+    def test_quickstart_runs_golden_path(self) -> None:
+        result = run_cli(
+            ["quickstart", "--repo", str(self.repo), "--bin-dir", str(self.bin_dir)],
+            env=self.env,
+            cwd=self.repo,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("home:", result.stdout)
+        self.assertIn("OK    codex CLI ready", result.stdout)
+        self.assertIn("started claude bridge", result.stdout)
+        self.assertIn("next:", result.stdout)
+
     def test_route_respects_availability_override(self) -> None:
         init = run_cli(["init"], env=self.env)
         self.assertEqual(init.returncode, 0, init.stderr)
