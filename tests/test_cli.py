@@ -87,6 +87,9 @@ def create_fake_agent_bin(bin_dir: Path) -> None:
             if args == ["--version"]:
                 print("claude 0.0-test")
                 raise SystemExit(0)
+            if args == ["auth", "status"]:
+                print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))
+                raise SystemExit(0)
             if "-p" in args:
                 output_format = "text"
                 if "--output-format" in args:
@@ -245,6 +248,8 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("OK    hermes CLI ready", doctor.stdout)
         self.assertIn("OK    claude CLI ready", doctor.stdout)
         self.assertIn("OK    openclaw CLI ready", doctor.stdout)
+        self.assertIn("OK    hermes runtime ready", doctor.stdout)
+        self.assertIn("OK    claude runtime ready", doctor.stdout)
 
     def test_agent_runtime_env_drops_codex_sandbox_flags(self) -> None:
         with mock.patch.dict(os.environ, {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt"}, clear=False):
@@ -281,6 +286,24 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
         self.assertIn("WARN  claude CLI ready", doctor.stdout)
         self.assertIn("hint: Install or expose the local claude CLI on PATH", doctor.stdout)
+
+    def test_summarize_error_strips_ansi_and_newlines(self) -> None:
+        summarized = ach_cli._summarize_error("\x1b[32mError:\x1b[0m Connection error.\nRetrying now.\n")
+        self.assertEqual(summarized, "Error: Connection error. Retrying now.")
+
+    def test_validate_bridge_start_rejects_claude_runtime_failure(self) -> None:
+        with mock.patch("agentcodehandoff.cli._agent_cli_health", return_value=(True, "ok")):
+            with mock.patch("agentcodehandoff.cli._agent_runtime_health", return_value=(False, "not logged in")):
+                with self.assertRaises(SystemExit) as exc:
+                    ach_cli._validate_bridge_start("claude", self.repo)
+        self.assertIn("claude runtime is not ready: not logged in", str(exc.exception))
+
+    def test_validate_bridge_start_rejects_hermes_runtime_failure(self) -> None:
+        with mock.patch("agentcodehandoff.cli._agent_cli_health", return_value=(True, "ok")):
+            with mock.patch("agentcodehandoff.cli._agent_runtime_health", return_value=(False, "APIConnectionError")):
+                with self.assertRaises(SystemExit) as exc:
+                    ach_cli._validate_bridge_start("hermes", self.repo)
+        self.assertIn("hermes runtime is not ready: APIConnectionError", str(exc.exception))
 
     def test_quickstart_runs_golden_path(self) -> None:
         result = run_cli(

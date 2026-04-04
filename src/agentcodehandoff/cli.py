@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import select
 import signal
 import shutil
@@ -202,6 +203,19 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
                         return parsed
         start = text.find("{", start + 1)
     return None
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+
+def _summarize_error(text: str, limit: int = 220) -> str:
+    cleaned = _strip_ansi(text or "")
+    cleaned = " ".join(part.strip() for part in cleaned.splitlines() if part.strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _agent_runtime_env() -> dict[str, str]:
@@ -911,6 +925,51 @@ def _run_hermes_auto(prompt: str, repo: Path) -> dict[str, Any]:
     return parsed
 
 
+def _claude_auth_health() -> tuple[bool, str]:
+    binary = shutil.which("claude")
+    if not binary:
+        return False, "not found on PATH"
+    result = subprocess.run(
+        [binary, "auth", "status"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+        env=_agent_runtime_env(),
+    )
+    combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        return False, _summarize_error(combined or f"exit {result.returncode}")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False, _summarize_error(combined or "invalid auth status output")
+    if not bool(payload.get("loggedIn")):
+        return False, "not logged in"
+    auth_method = str(payload.get("authMethod", "")).strip() or "unknown"
+    return True, f"logged in via {auth_method}"
+
+
+def _hermes_runtime_health(repo: Path) -> tuple[bool, str]:
+    binary = shutil.which("hermes")
+    if not binary:
+        return False, "not found on PATH"
+    result = subprocess.run(
+        [binary, "chat", "-Q", "--source", "tool", "-q", 'Return JSON only with summary "ok", details "ok", files empty.'],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+        env=_agent_runtime_env(),
+    )
+    combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    parsed = _extract_json_object(combined)
+    if result.returncode == 0 and parsed:
+        return True, "provider reachable"
+    return False, _summarize_error(combined or f"exit {result.returncode}")
+
+
 def _run_codex_auto(prompt: str, repo: Path) -> dict[str, Any]:
     output_path = DEFAULT_HOME / "automation" / "codex-last-response.txt"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1615,6 +1674,10 @@ def _failure_hint(agent: str, failure_class: str, last_error: str = "") -> str:
         return f"Inspect `agentcodehandoff logs --agents {agent} --lines 40`, fix the underlying cause, then force recovery."
     if "not logged in" in error_text:
         return f"The local {agent} CLI is installed but not authenticated in this runtime. Re-authenticate it and recover the bridge."
+    if "apiconnectionerror" in error_text or "connection error" in error_text:
+        if agent == "hermes":
+            return "Hermes can reach the CLI but not its configured provider. Verify the configured endpoint/model, then rerun `agentcodehandoff bridge-recover --agents hermes --force`."
+        return f"{agent} can start but cannot reach its configured provider right now. Check provider connectivity, then recover the bridge."
     if "not found on path" in error_text or "cli is not ready" in error_text:
         return f"Install or expose the local {agent} CLI on PATH, then rerun `agentcodehandoff doctor`."
     if "gateway" in error_text and agent == "openclaw":
@@ -1644,6 +1707,14 @@ def _agent_cli_health(agent: str) -> tuple[bool, str]:
     if result.returncode != 0 and not first_line:
         return False, f"exit {result.returncode}"
     return True, f"{binary} | {first_line or f'exit {result.returncode}'}"
+
+
+def _agent_runtime_health(agent: str, repo: Path) -> tuple[bool, str] | None:
+    if agent == "claude":
+        return _claude_auth_health()
+    if agent == "hermes":
+        return _hermes_runtime_health(repo)
+    return None
 
 
 def _validate_bridge_repo(repo: Path) -> str | None:
@@ -1677,6 +1748,14 @@ def _validate_bridge_start(agent: str, repo: Path) -> None:
             f"{agent} CLI is not ready: {cli_detail}. "
             f"Run `agentcodehandoff doctor` and verify the local {agent} CLI install/auth state."
         )
+    runtime_health = _agent_runtime_health(agent, repo)
+    if runtime_health is not None:
+        runtime_ok, runtime_detail = runtime_health
+        if not runtime_ok:
+            raise SystemExit(
+                f"{agent} runtime is not ready: {runtime_detail}. "
+                f"Run `agentcodehandoff doctor` and verify the local {agent} auth/provider state."
+            )
 
 
 def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
@@ -1691,7 +1770,7 @@ def _print_bridge_state(agent: str, state: dict[str, Any]) -> None:
         print(f"  last reply: {_format_timestamp(last_reply.isoformat())}")
     last_error = str(state.get("last_error", "")).strip()
     if last_error:
-        print(f"  last error: {last_error}")
+        print(f"  last error: {_summarize_error(last_error)}")
     seen_ids = state.get("seen_ids", [])
     if isinstance(seen_ids, list):
         print(f"  seen ids: {len(seen_ids)}")
@@ -1996,7 +2075,7 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     )
     last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
     if last_error:
-        print(f"  last error: {last_error}")
+        print(f"  last error: {_summarize_error(last_error)}")
     failure_class = str(status.get("failure_class", "")).strip()
     if failure_class:
         print(f"  failure class: {failure_class}")
@@ -2252,7 +2331,7 @@ def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int =
             rows.append(_truncate(f"  failure={failure_class}", width))
         last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
         if last_error:
-            rows.append(_truncate(f"  error={last_error}", width))
+            rows.append(_truncate(f"  error={_summarize_error(last_error, max(80, width - 10))}", width))
         if failure_class or last_error:
             rows.append(_truncate(f"  next={_failure_hint(agent, failure_class, last_error)}", width))
         oldest_pending_at = str(status.get("oldest_pending_at", "")).strip()
@@ -2280,7 +2359,7 @@ def _team_summary_line(home: Path, inbox_path: Path, agent: str, width: int) -> 
     if pending_count:
         parts.append(f"pending={pending_count}")
     if last_error:
-        parts.append(f"error={last_error}")
+        parts.append(f"error={_summarize_error(last_error, 100)}")
     elif failure_class:
         parts.append(_failure_hint(agent, failure_class, ""))
     return _truncate(" | ".join(parts), width)
@@ -4470,6 +4549,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     for agent in SUPPORTED_AGENTS:
         ok, detail = _agent_cli_health(agent)
         warnings.append((f"{agent} CLI ready", ok, detail))
+        runtime_health = _agent_runtime_health(agent, Path.cwd())
+        if runtime_health is not None:
+            runtime_ok, runtime_detail = runtime_health
+            warnings.append((f"{agent} runtime ready", runtime_ok, runtime_detail))
 
     for agent in SUPPORTED_AGENTS:
         for kind in ("watch", "send"):
@@ -4483,8 +4566,9 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             )
 
     for label, ok, detail in warnings:
-        _print_check("OK" if ok else "WARN", label, detail)
-        if not ok and label.endswith("CLI ready"):
+        rendered_detail = _summarize_error(detail, 220) if "runtime ready" in label else detail
+        _print_check("OK" if ok else "WARN", label, rendered_detail)
+        if not ok and (label.endswith("CLI ready") or label.endswith("runtime ready")):
             agent = label.split()[0].strip().lower()
             print(f"      hint: {_failure_hint(agent, '', detail)}")
 
