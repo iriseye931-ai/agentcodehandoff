@@ -81,6 +81,8 @@ If either one fails, fix that agent first and rerun:
 agentcodehandoff quickstart --template local-trio --repo /path/to/repo
 ```
 
+For a concrete end-to-end example with real Claude and Hermes failure outputs, see [examples/recovery.md](examples/recovery.md).
+
 ## Affected By The Claude Harness Policy?
 
 If you still want Claude Code in the mix, but cannot rely on a third-party harness model anymore, this is the intended setup:
