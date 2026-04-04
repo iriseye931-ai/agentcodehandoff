@@ -217,6 +217,34 @@ The product story is intentionally simple:
 
 That keeps the tool lightweight, local, and practical for real engineering workflows.
 
+## FAQ
+
+### Is this a hosted harness for Claude or other agent subscriptions?
+
+No. AgentCodeHandoff is a local coordination layer. You run your own local agent CLIs and keep auth in those tools. AgentCodeHandoff coordinates them.
+
+### Is this useful if I am affected by stricter Claude policy around third-party harnesses?
+
+Yes. The intended model is not "Claude runs everything for you through a third-party service." The intended model is "Claude is one local agent in a team, and AgentCodeHandoff coordinates it with Codex, Hermes, OpenClaw, or other local agents."
+
+### Does OpenClaw work here?
+
+Yes, OpenClaw is now a first-class supported agent in the tool. It is included in routing, wrappers, supervision, and the built-in `local-squad` preset. Live replies still depend on OpenClaw itself being configured locally.
+
+### Do I need to pay API costs through AgentCodeHandoff?
+
+No. This is a bring-your-own-agent tool. You use whatever local CLIs, plans, or providers you already use. AgentCodeHandoff is the coordination layer, not the provider.
+
+### What is the fastest way to see it working?
+
+Run:
+
+```bash
+./install.sh
+agentcodehandoff quickstart --repo /path/to/repo
+agentcodehandoff dashboard --view ops --interactive
+```
+
 ## Architecture
 
 <p align="center">
@@ -966,17 +994,6 @@ Current non-goals:
 - hosted/cloud orchestration
 - remote multi-machine coordination
 - GUI-first workflows
-
-## Positioning
-
-`agentcodehandoff` is intentionally narrow:
-
-- not a cloud orchestration platform
-- not a task router with hidden state
-- not a heavyweight agent framework
-- not a hosted relay for third-party subscription credentials
-
-It is the coordination layer you add when multiple coding agents already exist and need to collaborate reliably in one repo.
 
 ## Roadmap
 
