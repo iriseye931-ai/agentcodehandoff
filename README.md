@@ -2,13 +2,15 @@
   <img src="assets/agentcodehandoff-lockup.svg" alt="AgentCodeHandoff" width="760" />
 </p>
 
-<p align="center"><strong>Local control plane for coding agents.</strong></p>
+<p align="center"><strong>Local control plane for bring-your-own coding agents.</strong></p>
 
 <p align="center">
   <em>A local-first shared handoff, supervision, and ops layer for Codex, Claude Code, Hermes, and other terminal agents.</em>
 </p>
 
 `agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, supervised bridge processes, workflow-state updates, and a durable local record of who is doing what.
+
+It is intentionally a coordination layer, not a hosted model provider. You bring your own local agent CLIs and auth state. AgentCodeHandoff handles the collaboration.
 
 It is built for teams running:
 
@@ -38,6 +40,29 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 - `~/.agentcodehandoff/inbox.jsonl`
 - `~/.agentcodehandoff/claims.json`
+
+## What This Is
+
+- A local-first coordination layer for Codex, Claude Code, Hermes, and similar terminal agents
+- A shared handoff, routing, supervision, and recovery system that runs on your machine
+- A way to make already-installed agents collaborate inside one repo without constant human relaying
+
+## What This Is Not
+
+- Not a hosted agent platform
+- Not a model provider
+- Not a third-party Claude subscription harness
+- Not a resale layer for API or subscription access
+
+## Authentication Model
+
+AgentCodeHandoff follows a bring-your-own-agent model:
+
+- you install and authenticate Codex, Claude Code, Hermes, or other local agent CLIs yourself
+- AgentCodeHandoff launches those local CLIs as workers
+- credentials stay with the local runtime of those tools
+
+This repo is designed for local orchestration of user-controlled agent runtimes. It is not designed to proxy or resell third-party subscription access through a hosted service.
 
 ## What It Includes
 
@@ -69,6 +94,16 @@ This repo is no longer just a shared inbox prototype. The current build supports
 - interactive operator controls from the terminal dashboard
 - explicit availability overrides for rate-limited or offline agents
 - live trio verification with Codex, Hermes, and Claude
+
+## Positioning
+
+The product story is intentionally simple:
+
+- you already have agent tools
+- you already pay for them however you choose
+- AgentCodeHandoff makes them coordinate
+
+That keeps the tool lightweight, local, and practical for real engineering workflows.
 
 ## Quick Start
 
@@ -558,6 +593,7 @@ This is the current release-hardening baseline. Before a broad public release, t
 - Real provider/runtime differences can still surface outside the isolated fake-agent test suite.
 - The dashboard is terminal-first and intentionally lightweight; it is not a full graphical control plane.
 - The current test suite is strong on critical paths, but not yet exhaustive across every command combination.
+- Claude Code behavior depends on the local `claude` CLI being installed and authenticated in the same runtime environment where the bridge process is launched.
 
 ## Wrapper Commands
 
@@ -767,6 +803,13 @@ agentcodehandoff dispatch \
 - Agent CLIs: Codex, Claude, and Hermes are the primary supported agents today
 - Platform expectation: Unix-like environments with `git`, `python3`, and standard process semantics
 
+### Runtime model
+
+- Local machine: supported
+- Shared repo on local filesystem: supported
+- User-managed local agent CLIs: supported
+- Hosted relay of third-party subscription credentials: not supported
+
 Current support is strongest for:
 
 - local development on macOS and Linux-style shells
@@ -786,6 +829,7 @@ Current non-goals:
 - not a cloud orchestration platform
 - not a task router with hidden state
 - not a heavyweight agent framework
+- not a hosted relay for third-party subscription credentials
 
 It is the coordination layer you add when multiple coding agents already exist and need to collaborate reliably in one repo.
 
