@@ -218,6 +218,30 @@ def _summarize_error(text: str, limit: int = 220) -> str:
     return cleaned[: max(0, limit - 1)].rstrip() + "…"
 
 
+def _extract_hermes_runtime_context(text: str) -> str:
+    cleaned = _strip_ansi(text or "")
+    provider = ""
+    model = ""
+    endpoint = ""
+    provider_match = re.search(r"Provider:\s*([^\n]+?)(?:\s+Model:|$)", cleaned)
+    model_match = re.search(r"Model:\s*([^\n]+)", cleaned)
+    endpoint_match = re.search(r"Endpoint:\s*([^\n]+)", cleaned)
+    if provider_match:
+        provider = provider_match.group(1).strip()
+    if model_match:
+        model = model_match.group(1).strip()
+    if endpoint_match:
+        endpoint = endpoint_match.group(1).strip()
+    parts = []
+    if provider:
+        parts.append(f"provider={provider}")
+    if model:
+        parts.append(f"model={model}")
+    if endpoint:
+        parts.append(f"endpoint={endpoint}")
+    return " | ".join(parts)
+
+
 def _agent_runtime_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
@@ -967,13 +991,32 @@ def _hermes_runtime_health(repo: Path) -> tuple[bool, str]:
             timeout=20,
             env=_agent_runtime_env(),
         )
+    except subprocess.TimeoutExpired as exc:
+        captured = ""
+        if isinstance(exc.stdout, bytes):
+            captured += exc.stdout.decode("utf-8", errors="ignore")
+        elif isinstance(exc.stdout, str):
+            captured += exc.stdout
+        if isinstance(exc.stderr, bytes):
+            captured += "\n" + exc.stderr.decode("utf-8", errors="ignore")
+        elif isinstance(exc.stderr, str):
+            captured += "\n" + exc.stderr
+        context = _extract_hermes_runtime_context(captured)
+        summary = f"timed out after {int(exc.timeout)}s"
+        if context:
+            summary += f" | {context}"
+        return False, summary
     except Exception as exc:
         return False, _summarize_error(str(exc))
     combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
     parsed = _extract_json_object(combined)
     if result.returncode == 0 and parsed:
         return True, "provider reachable"
-    return False, _summarize_error(combined or f"exit {result.returncode}")
+    context = _extract_hermes_runtime_context(combined)
+    summary = _summarize_error(combined or f"exit {result.returncode}")
+    if context:
+        summary = f"{summary} | {context}"
+    return False, summary
 
 
 def _run_codex_auto(prompt: str, repo: Path) -> dict[str, Any]:

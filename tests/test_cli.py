@@ -300,6 +300,13 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         summarized = ach_cli._summarize_error("\x1b[32mError:\x1b[0m Connection error.\nRetrying now.\n")
         self.assertEqual(summarized, "Error: Connection error. Retrying now.")
 
+    def test_extract_hermes_runtime_context(self) -> None:
+        text = "Provider: custom  Model: /tmp/model\nEndpoint: http://127.0.0.1:8080/v1\n"
+        context = ach_cli._extract_hermes_runtime_context(text)
+        self.assertIn("provider=custom", context)
+        self.assertIn("model=/tmp/model", context)
+        self.assertIn("endpoint=http://127.0.0.1:8080/v1", context)
+
     def test_failure_hint_handles_claude_logged_out_json(self) -> None:
         hint = ach_cli._failure_hint("claude", "", '{ "loggedIn": false, "authMethod": "none" }')
         self.assertIn("reports no active login", hint)
@@ -307,6 +314,23 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
     def test_failure_hint_handles_hermes_timeout(self) -> None:
         hint = ach_cli._failure_hint("hermes", "", "Command timed out after 20 seconds")
         self.assertIn("provider path is timing out", hint)
+
+    def test_hermes_runtime_health_timeout_includes_context(self) -> None:
+        def fake_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=args[0],
+                timeout=20,
+                output="Provider: custom  Model: /tmp/model\nEndpoint: http://127.0.0.1:8080/v1\n",
+                stderr="Connection error.",
+            )
+
+        with mock.patch("agentcodehandoff.cli.shutil.which", return_value="/tmp/hermes"):
+            with mock.patch("agentcodehandoff.cli.subprocess.run", side_effect=fake_run):
+                ok, detail = ach_cli._hermes_runtime_health(self.repo)
+        self.assertFalse(ok)
+        self.assertIn("timed out after 20s", detail)
+        self.assertIn("provider=custom", detail)
+        self.assertIn("endpoint=http://127.0.0.1:8080/v1", detail)
 
     def test_validate_bridge_start_rejects_claude_runtime_failure(self) -> None:
         with mock.patch("agentcodehandoff.cli._agent_cli_health", return_value=(True, "ok")):

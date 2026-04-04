@@ -54,6 +54,7 @@ Common first-run fixes:
 - `agentcodehandoff doctor` if a bridge will not start. It now prints agent-specific next steps for missing or unauthenticated CLIs.
 - `agentcodehandoff doctor` also runs deeper runtime checks for Claude auth and Hermes provider reachability before you start bridges.
 - `agentcodehandoff agent-check --agent claude --repo /path/to/repo` if `claude auth status` looks healthy but the supervised Claude bridge still fails.
+- `agentcodehandoff agent-check --agent hermes --repo /path/to/repo` if Hermes is installed but timing out or not reaching its configured provider.
 - `agentcodehandoff bridge-status` if a bridge looks paused or stale. It now prints a remediation hint alongside the failure class and last error.
 - `agentcodehandoff logs --agents claude --lines 40` if Claude is installed but not replying
 - `agentcodehandoff logs --agents openclaw --lines 40` if OpenClaw is installed but not configured
