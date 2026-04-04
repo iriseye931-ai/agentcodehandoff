@@ -304,6 +304,10 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         hint = ach_cli._failure_hint("claude", "", '{ "loggedIn": false, "authMethod": "none" }')
         self.assertIn("reports no active login", hint)
 
+    def test_failure_hint_handles_hermes_timeout(self) -> None:
+        hint = ach_cli._failure_hint("hermes", "", "Command timed out after 20 seconds")
+        self.assertIn("provider path is timing out", hint)
+
     def test_validate_bridge_start_rejects_claude_runtime_failure(self) -> None:
         with mock.patch("agentcodehandoff.cli._agent_cli_health", return_value=(True, "ok")):
             with mock.patch("agentcodehandoff.cli._agent_runtime_health", return_value=(False, "not logged in")):

@@ -929,14 +929,17 @@ def _claude_auth_health() -> tuple[bool, str]:
     binary = shutil.which("claude")
     if not binary:
         return False, "not found on PATH"
-    result = subprocess.run(
-        [binary, "auth", "status"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=15,
-        env=_agent_runtime_env(),
-    )
+    try:
+        result = subprocess.run(
+            [binary, "auth", "status"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+            env=_agent_runtime_env(),
+        )
+    except Exception as exc:
+        return False, _summarize_error(str(exc))
     combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
     if result.returncode != 0:
         return False, _summarize_error(combined or f"exit {result.returncode}")
@@ -954,15 +957,18 @@ def _hermes_runtime_health(repo: Path) -> tuple[bool, str]:
     binary = shutil.which("hermes")
     if not binary:
         return False, "not found on PATH"
-    result = subprocess.run(
-        [binary, "chat", "-Q", "--source", "tool", "-q", 'Return JSON only with summary "ok", details "ok", files empty.'],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=20,
-        env=_agent_runtime_env(),
-    )
+    try:
+        result = subprocess.run(
+            [binary, "chat", "-Q", "--source", "tool", "-q", 'Return JSON only with summary "ok", details "ok", files empty.'],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+            env=_agent_runtime_env(),
+        )
+    except Exception as exc:
+        return False, _summarize_error(str(exc))
     combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
     parsed = _extract_json_object(combined)
     if result.returncode == 0 and parsed:
@@ -1684,6 +1690,10 @@ def _failure_hint(agent: str, failure_class: str, last_error: str = "") -> str:
         if agent == "hermes":
             return "Hermes can reach the CLI but not its configured provider. Verify the configured endpoint/model, then rerun `agentcodehandoff bridge-recover --agents hermes --force`."
         return f"{agent} can start but cannot reach its configured provider right now. Check provider connectivity, then recover the bridge."
+    if "timed out after" in error_text:
+        if agent == "hermes":
+            return "Hermes CLI is available, but its provider path is timing out. Verify the configured endpoint/model and rerun `agentcodehandoff agent-check --agent hermes --repo /path/to/repo`."
+        return f"{agent} started but did not complete the bridge probe in time. Re-run `agentcodehandoff agent-check --agent {agent} --repo /path/to/repo` and inspect logs."
     if "not found on path" in error_text or "cli is not ready" in error_text:
         return f"Install or expose the local {agent} CLI on PATH, then rerun `agentcodehandoff doctor`."
     if "gateway" in error_text and agent == "openclaw":
