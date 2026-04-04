@@ -246,6 +246,18 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("OK    claude CLI ready", doctor.stdout)
         self.assertIn("OK    openclaw CLI ready", doctor.stdout)
 
+    def test_doctor_shows_actionable_cli_hint(self) -> None:
+        init = run_cli(["init", "--bin-dir", str(self.bin_dir)], env=self.env)
+        self.assertEqual(init.returncode, 0, init.stderr)
+        env = self.env.copy()
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env["PATH"] = f"{self.bin_dir}:{git_dir}"
+        (self.bin_dir / "claude").unlink()
+        doctor = run_cli(["doctor", "--bin-dir", str(self.bin_dir)], env=env)
+        self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
+        self.assertIn("WARN  claude CLI ready", doctor.stdout)
+        self.assertIn("hint: Install or expose the local claude CLI on PATH", doctor.stdout)
+
     def test_quickstart_runs_golden_path(self) -> None:
         result = run_cli(
             ["quickstart", "--repo", str(self.repo), "--bin-dir", str(self.bin_dir)],
@@ -395,6 +407,32 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("claude: paused", result.stdout)
         self.assertIn("failure=auth", result.stdout)
         self.assertIn("error=Not logged in", result.stdout)
+
+    def test_bridge_status_shows_actionable_failure_hint(self) -> None:
+        self.write_bridge_profile("claude", repo=self.repo)
+        self.write_bridge_lock(
+            "claude",
+            {
+                "agent": "claude",
+                "pid": 0,
+                "supervisor_pid": 0,
+                "repo": str(self.repo),
+                "paused": True,
+                "failure_class": "auth",
+                "log_path": str(self.home / "logs" / "claude-bridge.log"),
+                "max_restarts": 3,
+                "cool_off_seconds": 60.0,
+            },
+        )
+        (self.home / "automation").mkdir(parents=True, exist_ok=True)
+        (self.home / "automation" / "claude.json").write_text(
+            json.dumps({"seen_ids": [], "last_poll_at": "", "last_reply_at": "", "last_error": "Not logged in"}),
+            encoding="utf-8",
+        )
+        result = run_cli(["bridge-status", "--agents", "claude"], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("failure class: auth", result.stdout)
+        self.assertIn("hint: Re-authenticate the local claude CLI", result.stdout)
 
     def test_events_merges_messages_and_bridge_events(self) -> None:
         init = run_cli(["init"], env=self.env)

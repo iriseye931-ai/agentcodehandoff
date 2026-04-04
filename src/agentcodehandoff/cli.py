@@ -1590,6 +1590,28 @@ def _print_check(level: str, label: str, detail: str) -> None:
     print(f"      {detail}")
 
 
+def _failure_hint(agent: str, failure_class: str, last_error: str = "") -> str:
+    failure = failure_class.strip().lower()
+    error_text = last_error.strip().lower()
+    if failure == "auth":
+        return f"Re-authenticate the local {agent} CLI, then rerun `agentcodehandoff bridge-recover --agents {agent} --force`."
+    if failure == "missing-dependency":
+        return f"Install or fix the local {agent} CLI on PATH, confirm with `agentcodehandoff doctor`, then restart the bridge."
+    if failure == "repo":
+        return "Point the bridge at a valid local git repository, then restart it."
+    if failure == "rate-limit":
+        return f"Mark {agent} as rate-limited with `agentcodehandoff availability-set --agent {agent} --state rate-limited` or wait for capacity to return."
+    if failure == "restart-limit":
+        return f"Inspect `agentcodehandoff logs --agents {agent} --lines 40`, fix the underlying cause, then force recovery."
+    if "not logged in" in error_text:
+        return f"The local {agent} CLI is installed but not authenticated in this runtime. Re-authenticate it and recover the bridge."
+    if "not found on path" in error_text or "cli is not ready" in error_text:
+        return f"Install or expose the local {agent} CLI on PATH, then rerun `agentcodehandoff doctor`."
+    if "gateway" in error_text and agent == "openclaw":
+        return "OpenClaw needs its own local gateway/agent configuration. Verify `openclaw agent --json --agent main` works first."
+    return "Inspect the bridge log and recent events, then use bridge-recover once the underlying issue is fixed."
+
+
 def _agent_cli_health(agent: str) -> tuple[bool, str]:
     binary = shutil.which(agent)
     if not binary:
@@ -1940,6 +1962,7 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     print(_bridge_supervision_line(status, 120))
     lock = status.get("lock", {}) if isinstance(status.get("lock"), dict) else {}
     profile = status.get("profile", {}) if isinstance(status.get("profile"), dict) else {}
+    agent = str(status.get("agent", "")).strip()
     repo = str(lock.get("repo", "")).strip()
     if repo:
         print(f"  repo: {repo}")
@@ -1964,6 +1987,8 @@ def _print_bridge_supervision(status: dict[str, Any]) -> None:
     failure_class = str(status.get("failure_class", "")).strip()
     if failure_class:
         print(f"  failure class: {failure_class}")
+    if failure_class or last_error:
+        print(f"  hint: {_failure_hint(agent, failure_class, last_error)}")
     if status.get("auto_sweep"):
         print(f"  auto sweep: every {float(status.get('sweep_interval', 0.0) or 0.0):.1f}s")
         last_sweep_at = str(status.get("last_sweep_at", "")).strip()
@@ -2215,6 +2240,8 @@ def _ops_supervision_rows(home: Path, inbox_path: Path, width: int, limit: int =
         last_error = str(status.get("automation_state", {}).get("last_error", "")).strip()
         if last_error:
             rows.append(_truncate(f"  error={last_error}", width))
+        if failure_class or last_error:
+            rows.append(_truncate(f"  next={_failure_hint(agent, failure_class, last_error)}", width))
         oldest_pending_at = str(status.get("oldest_pending_at", "")).strip()
         if oldest_pending_at:
             rows.append(_truncate(f"  oldest pending={_format_timestamp(oldest_pending_at)}", width))
@@ -2241,6 +2268,8 @@ def _team_summary_line(home: Path, inbox_path: Path, agent: str, width: int) -> 
         parts.append(f"pending={pending_count}")
     if last_error:
         parts.append(f"error={last_error}")
+    elif failure_class:
+        parts.append(_failure_hint(agent, failure_class, ""))
     return _truncate(" | ".join(parts), width)
 
 
@@ -4442,6 +4471,9 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     for label, ok, detail in warnings:
         _print_check("OK" if ok else "WARN", label, detail)
+        if not ok and label.endswith("CLI ready"):
+            agent = label.split()[0].strip().lower()
+            print(f"      hint: {_failure_hint(agent, '', detail)}")
 
     if failures:
         print()
