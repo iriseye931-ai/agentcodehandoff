@@ -106,6 +106,14 @@ agentcodehandoff agent-check --agent claude --repo /path/to/repo
 
 That reproduces the real bridge invocation path and tells you exactly what to fix next.
 
+If you are using the four-agent squad, also run:
+
+```bash
+agentcodehandoff agent-check --agent openclaw --repo /path/to/repo
+```
+
+and use [examples/local-squad-recovery.md](examples/local-squad-recovery.md) as the recovery checklist.
+
 <p align="center">
   <img src="assets/agentcodehandoff-demo.svg" alt="AgentCodeHandoff terminal demo" width="920" />
 </p>
