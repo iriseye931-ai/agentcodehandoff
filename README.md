@@ -8,6 +8,12 @@
   <em>A local-first shared handoff, supervision, and ops layer for Codex, Claude Code, Hermes, OpenClaw, and other terminal agents.</em>
 </p>
 
+<p align="center">
+  <a href="https://github.com/iriseye931-ai/agentcodehandoff/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/iriseye931-ai/agentcodehandoff/ci.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/iriseye931-ai/agentcodehandoff/releases/tag/v0.1.0-alpha"><img alt="Release" src="https://img.shields.io/github/v/release/iriseye931-ai/agentcodehandoff?display_name=tag"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/iriseye931-ai/agentcodehandoff"></a>
+</p>
+
 `agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, supervised bridge processes, workflow-state updates, and a durable local record of who is doing what.
 
 It is intentionally a coordination layer, not a hosted model provider. You bring your own local agent CLIs and auth state. AgentCodeHandoff handles the collaboration.
@@ -30,6 +36,25 @@ agentcodehandoff request \
   --details "Reply automatically with a short acknowledgement." \
   --files README.md
 ```
+
+Choose your team:
+
+- `local-trio`: Codex + Hermes + Claude
+- `local-squad`: Codex + Hermes + Claude + OpenClaw
+- `local-pair`: Codex + Hermes
+
+If you want the four-agent setup:
+
+```bash
+agentcodehandoff quickstart --template local-squad --repo /path/to/repo
+```
+
+Common first-run fixes:
+
+- `agentcodehandoff doctor` if a bridge will not start
+- `agentcodehandoff bridge-status` if a bridge looks paused or stale
+- `agentcodehandoff logs --agents claude --lines 40` if Claude is installed but not replying
+- `agentcodehandoff logs --agents openclaw --lines 40` if OpenClaw is installed but not configured
 
 <p align="center">
   <img src="assets/agentcodehandoff-demo.svg" alt="AgentCodeHandoff terminal demo" width="920" />
