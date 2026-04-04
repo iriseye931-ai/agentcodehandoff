@@ -995,6 +995,28 @@ Current non-goals:
 - remote multi-machine coordination
 - GUI-first workflows
 
+## Known Good Setups
+
+These are the setups we currently feel best about for public alpha use:
+
+- `local-pair`
+  - Codex + Hermes
+  - strongest option for simple local collaboration with low setup friction
+- `local-trio`
+  - Codex + Hermes + Claude
+  - best validated multi-agent setup today
+  - live-verified with supervised bridges and real replies
+- `local-squad`
+  - Codex + Hermes + Claude + OpenClaw
+  - fully integrated in the tool
+  - best used when OpenClaw itself is already configured locally
+
+Practical guidance:
+
+- if you want the safest first experience, start with `local-trio`
+- if Claude is unavailable or rate-limited, `local-pair` is still a strong path
+- if you specifically want OpenClaw in the mix, use `local-squad` after confirming `openclaw agent --json --agent main` works locally
+
 ## Public Alpha Roadmap
 
 Near-term priorities:
