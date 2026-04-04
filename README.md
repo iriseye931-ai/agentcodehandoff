@@ -58,6 +58,28 @@ Common first-run fixes:
 - `agentcodehandoff logs --agents claude --lines 40` if Claude is installed but not replying
 - `agentcodehandoff logs --agents openclaw --lines 40` if OpenClaw is installed but not configured
 
+## Affected By The Claude Harness Policy?
+
+If you still want Claude Code in the mix, but cannot rely on a third-party harness model anymore, this is the intended setup:
+
+- run your own local `claude`
+- run your own local `codex`, `hermes`, and optionally `openclaw`
+- let `AgentCodeHandoff` coordinate them locally
+
+Start here:
+
+```bash
+agentcodehandoff quickstart --template local-trio --repo /path/to/repo
+```
+
+If Claude still fails even though `claude auth status` looks fine:
+
+```bash
+agentcodehandoff agent-check --agent claude --repo /path/to/repo
+```
+
+That reproduces the real bridge invocation path and tells you exactly what to fix next.
+
 <p align="center">
   <img src="assets/agentcodehandoff-demo.svg" alt="AgentCodeHandoff terminal demo" width="920" />
 </p>

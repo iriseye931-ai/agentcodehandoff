@@ -4035,7 +4035,21 @@ def cmd_quickstart(args: argparse.Namespace) -> None:
             verbose=args.verbose,
             timeout=args.timeout,
         )
-        cmd_up(up_args)
+        try:
+            cmd_up(up_args)
+        except SystemExit as exc:
+            print()
+            print("team startup needs attention:")
+            detail = str(exc).strip()
+            if detail:
+                print(f"  {detail}")
+            if template in {"local-trio", "local-squad"}:
+                print(f"  agentcodehandoff agent-check --agent claude --repo {args.repo}")
+            if template in {"local-pair", "local-trio", "local-squad"}:
+                print(f"  agentcodehandoff agent-check --agent hermes --repo {args.repo}")
+            if template == "local-squad":
+                print(f"  agentcodehandoff agent-check --agent openclaw --repo {args.repo}")
+            raise
         print()
 
     print("next:")

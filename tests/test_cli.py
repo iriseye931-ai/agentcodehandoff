@@ -343,6 +343,33 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("started claude bridge", result.stdout)
         self.assertIn("next:", result.stdout)
 
+    def test_quickstart_failure_points_to_agent_check(self) -> None:
+        args = argparse.Namespace(
+            home=self.home,
+            inbox_path=self.home / "inbox.jsonl",
+            claims_path=self.home / "claims.json",
+            sessions_path=self.home / "sessions.json",
+            agents=ach_cli._default_agents(),
+            seed=True,
+            force=False,
+            bin_dir=self.bin_dir,
+            template="local-trio",
+            repo=self.repo,
+            start_team=True,
+            verbose=False,
+            timeout=3.0,
+        )
+        buffer = io.StringIO()
+        with mock.patch("agentcodehandoff.cli.cmd_doctor", return_value=None):
+            with mock.patch("agentcodehandoff.cli.cmd_up", side_effect=SystemExit("claude runtime is not ready")):
+                with contextlib.redirect_stdout(buffer):
+                    with self.assertRaises(SystemExit):
+                        ach_cli.cmd_quickstart(args)
+        output = buffer.getvalue()
+        self.assertIn("team startup needs attention:", output)
+        self.assertIn("agentcodehandoff agent-check --agent claude", output)
+        self.assertIn("agentcodehandoff agent-check --agent hermes", output)
+
     def test_quickstart_local_squad_mentions_openclaw(self) -> None:
         result = run_cli(
             ["quickstart", "--template", "local-squad", "--repo", str(self.repo), "--bin-dir", str(self.bin_dir)],
