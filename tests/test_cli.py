@@ -441,6 +441,67 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("codex -> claude [request]", result.stdout)
         self.assertIn("Timeline test", result.stdout)
 
+    def test_request_trace_prefers_latest_matching_request(self) -> None:
+        init = run_cli(["init"], env=self.env)
+        self.assertEqual(init.returncode, 0, init.stderr)
+        first = run_cli(
+            [
+                "request",
+                "--from-agent",
+                "codex",
+                "--to-agent",
+                "hermes",
+                "--summary",
+                "Older request",
+                "--details",
+                "First request",
+                "--files",
+                "README.md",
+            ],
+            env=self.env,
+            cwd=self.repo,
+        )
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        second = run_cli(
+            [
+                "request",
+                "--from-agent",
+                "codex",
+                "--to-agent",
+                "hermes",
+                "--summary",
+                "Newer request",
+                "--details",
+                "Second request",
+                "--files",
+                "README.md",
+            ],
+            env=self.env,
+            cwd=self.repo,
+        )
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        inbox_path = self.home / "inbox.jsonl"
+        messages = read_inbox(inbox_path)
+        newer_request_id = str(messages[1]["id"])
+        ach_cli._send_record(
+            inbox_path,
+            from_agent="hermes",
+            to_agent="codex",
+            role="handoff",
+            task="shared task",
+            summary="Ack newer",
+            details="Acknowledged latest request only.",
+            files=["README.md"],
+        )
+        requests = run_cli(["requests", "--limit", "10"], env=self.env, cwd=self.repo)
+        self.assertEqual(requests.returncode, 0, requests.stdout + requests.stderr)
+        self.assertIn("codex->hermes [pending] Older request", requests.stdout)
+        self.assertIn("codex->hermes [acknowledged] Newer request", requests.stdout)
+        trace = run_cli(["request-trace", "--request-id", newer_request_id], env=self.env, cwd=self.repo)
+        self.assertEqual(trace.returncode, 0, trace.stdout + trace.stderr)
+        self.assertIn("Newer request", trace.stdout)
+        self.assertIn("Ack newer", trace.stdout)
+
     def test_bridge_recover_starts_from_saved_profile_without_live_lock(self) -> None:
         self.write_bridge_profile("claude")
         result = run_cli(["bridge-recover", "--agents", "claude", "--repo", str(self.repo)], env=self.env, cwd=self.repo)

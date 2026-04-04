@@ -619,6 +619,8 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         message for message in messages
         if str(message.get("role", "")).strip().lower() == "handoff"
     ]
+    inferred_handoff_request_ids = _infer_request_links(requests, handoffs)
+    inferred_outcome_request_ids = _infer_request_links(requests, outcomes)
     records: list[dict[str, Any]] = []
     for request in requests:
         request_id = str(request.get("id", "")).strip()
@@ -628,9 +630,7 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if (
                 str(item.get("request_id", "")).strip() == request_id
                 or (
-                    str(item.get("from", "")).strip().lower() == request_to
-                    and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
-                    and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+                    inferred_outcome_request_ids.get(str(item.get("id", "")).strip()) == request_id
                 )
             )
         ]
@@ -639,9 +639,7 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if (
                 str(item.get("request_id", "")).strip() == request_id
                 or (
-                    str(item.get("from", "")).strip().lower() == request_to
-                    and str(item.get("to", "")).strip().lower() == str(request.get("from", "")).strip().lower()
-                    and str(item.get("task", "")).strip() == str(request.get("task", "")).strip()
+                    inferred_handoff_request_ids.get(str(item.get("id", "")).strip()) == request_id
                 )
             )
         ]
@@ -667,6 +665,80 @@ def _request_records(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def _infer_request_links(
+    requests: list[dict[str, Any]],
+    replies: list[dict[str, Any]],
+) -> dict[str, str]:
+    request_times: dict[str, datetime] = {}
+    for request in requests:
+        request_id = str(request.get("id", "")).strip()
+        timestamp = _parse_iso(str(request.get("timestamp", "")).strip())
+        if request_id and timestamp is not None:
+            request_times[request_id] = timestamp
+
+    inferred: dict[str, str] = {}
+    for reply in replies:
+        reply_id = str(reply.get("id", "")).strip()
+        if not reply_id or str(reply.get("request_id", "")).strip():
+            continue
+        reply_time = _parse_iso(str(reply.get("timestamp", "")).strip())
+        if reply_time is None:
+            continue
+        reply_from = str(reply.get("from", "")).strip().lower()
+        reply_to = str(reply.get("to", "")).strip().lower()
+        reply_task = str(reply.get("task", "")).strip()
+        candidate_id = ""
+        candidate_time: datetime | None = None
+        for request in requests:
+            request_id = str(request.get("id", "")).strip()
+            request_time = request_times.get(request_id)
+            if not request_id or request_time is None or request_time > reply_time:
+                continue
+            if str(request.get("from", "")).strip().lower() != reply_to:
+                continue
+            if str(request.get("to", "")).strip().lower() != reply_from:
+                continue
+            if str(request.get("task", "")).strip() != reply_task:
+                continue
+            if candidate_time is None or request_time > candidate_time:
+                candidate_id = request_id
+                candidate_time = request_time
+        if candidate_id:
+            inferred[reply_id] = candidate_id
+    return inferred
+
+
+def _request_trace_entries(messages: list[dict[str, Any]], request_id: str) -> list[dict[str, Any]]:
+    request = next((message for message in messages if str(message.get("id", "")).strip() == request_id), None)
+    if not isinstance(request, dict):
+        return []
+    requests = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"request", "task", "auto-request"}
+        and not str(message.get("derived_from_request_id", "")).strip()
+    ]
+    replies = [
+        message for message in messages
+        if str(message.get("role", "")).strip().lower() in {"handoff", "done", "blocked", "review", "approved", "closed", "escalated"}
+    ]
+    inferred = _infer_request_links(requests, replies)
+    trace: list[dict[str, Any]] = [request]
+    for message in messages:
+        if message is request:
+            continue
+        if str(message.get("request_id", "")).strip() == request_id:
+            trace.append(message)
+            continue
+        if str(message.get("derived_from_request_id", "")).strip() == request_id:
+            trace.append(message)
+            continue
+        message_id = str(message.get("id", "")).strip()
+        if inferred.get(message_id) == request_id:
+            trace.append(message)
+    trace.sort(key=lambda item: _parse_iso(str(item.get("timestamp", "")).strip()) or datetime.min.replace(tzinfo=timezone.utc))
+    return trace
 
 
 def _request_record_by_id(records: list[dict[str, Any]], request_id: str) -> dict[str, Any] | None:
@@ -1354,6 +1426,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff auto-status "$@"\n'
     elif kind == "events":
         command = 'exec agentcodehandoff events "$@"\n'
+    elif kind == "request-trace":
+        command = 'exec agentcodehandoff request-trace "$@"\n'
     elif kind == "status":
         command = 'exec agentcodehandoff status "$@"\n'
     elif kind == "ps":
@@ -1483,7 +1557,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "ops-next", "auto-status", "events", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "up", "down", "restart-team"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "events", "request-trace", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "up", "down", "restart-team"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -2714,6 +2788,15 @@ def cmd_events(args: argparse.Namespace) -> None:
         if detail:
             print(f"  {detail}")
         print()
+
+
+def cmd_request_trace(args: argparse.Namespace) -> None:
+    messages = _read_messages(args.inbox_path)
+    trace = _request_trace_entries(messages, args.request_id)
+    if not trace:
+        raise SystemExit(f"no request trace found for id {args.request_id}")
+    for message in trace:
+        _print_message(message)
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -4631,6 +4714,10 @@ def build_parser() -> argparse.ArgumentParser:
     requests_parser.add_argument("--agent", help="filter requests by from/to agent")
     requests_parser.add_argument("--limit", type=int, default=20)
     requests_parser.set_defaults(func=cmd_requests)
+
+    request_trace_parser = subparsers.add_parser("request-trace", help="show the full lifecycle timeline for a single request")
+    request_trace_parser.add_argument("--request-id", required=True)
+    request_trace_parser.set_defaults(func=cmd_request_trace)
 
     request_sweep_parser = subparsers.add_parser("request-sweep", help="dry-run or apply timeout actions for stale requests")
     request_sweep_parser.add_argument("--agent", help="filter requests by from/to agent")
