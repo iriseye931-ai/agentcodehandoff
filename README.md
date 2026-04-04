@@ -12,6 +12,29 @@
 
 It is intentionally a coordination layer, not a hosted model provider. You bring your own local agent CLIs and auth state. AgentCodeHandoff handles the collaboration.
 
+## Try This Now
+
+```bash
+./install.sh
+agentcodehandoff quickstart --repo /path/to/repo
+agentcodehandoff dashboard --view ops --interactive
+```
+
+Then send one real request:
+
+```bash
+agentcodehandoff request \
+  --from-agent codex \
+  --to-agent hermes \
+  --summary "Need help" \
+  --details "Reply automatically with a short acknowledgement." \
+  --files README.md
+```
+
+<p align="center">
+  <img src="assets/agentcodehandoff-demo.svg" alt="AgentCodeHandoff terminal demo" width="920" />
+</p>
+
 It is built for teams running:
 
 - Codex + Claude + Hermes
