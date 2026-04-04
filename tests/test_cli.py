@@ -396,6 +396,51 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("failure=auth", result.stdout)
         self.assertIn("error=Not logged in", result.stdout)
 
+    def test_events_merges_messages_and_bridge_events(self) -> None:
+        init = run_cli(["init"], env=self.env)
+        self.assertEqual(init.returncode, 0, init.stderr)
+        self.write_bridge_lock(
+            "claude",
+            {
+                "agent": "claude",
+                "pid": 0,
+                "supervisor_pid": 0,
+                "repo": str(self.repo),
+                "paused": True,
+                "recent_events": [
+                    {
+                        "timestamp": "2026-04-04T00:00:00+00:00",
+                        "type": "paused",
+                        "summary": "Paused after startup failure",
+                        "detail": "auth problem",
+                    }
+                ],
+            },
+        )
+        request = run_cli(
+            [
+                "request",
+                "--from-agent",
+                "codex",
+                "--to-agent",
+                "claude",
+                "--summary",
+                "Timeline test",
+                "--details",
+                "Need acknowledgement.",
+                "--files",
+                "README.md",
+            ],
+            env=self.env,
+            cwd=self.repo,
+        )
+        self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
+        result = run_cli(["events", "--agents", "claude", "codex", "--limit", "10"], env=self.env, cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("claude bridge [paused]", result.stdout)
+        self.assertIn("codex -> claude [request]", result.stdout)
+        self.assertIn("Timeline test", result.stdout)
+
     def test_bridge_recover_starts_from_saved_profile_without_live_lock(self) -> None:
         self.write_bridge_profile("claude")
         result = run_cli(["bridge-recover", "--agents", "claude", "--repo", str(self.repo)], env=self.env, cwd=self.repo)

@@ -1352,6 +1352,8 @@ def _generic_wrapper_script(kind: str) -> str:
         command = 'exec agentcodehandoff dashboard "$@"\n'
     elif kind == "auto-status":
         command = 'exec agentcodehandoff auto-status "$@"\n'
+    elif kind == "events":
+        command = 'exec agentcodehandoff events "$@"\n'
     elif kind == "status":
         command = 'exec agentcodehandoff status "$@"\n'
     elif kind == "ps":
@@ -1481,7 +1483,7 @@ def _wrapper_script(kind: str, agent: str) -> str:
 def _install_wrappers(bin_dir: Path, force: bool = False) -> list[Path]:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrappers: list[Path] = []
-    for kind in ("dashboard", "ops", "ops-next", "auto-status", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "up", "down", "restart-team"):
+    for kind in ("dashboard", "ops", "ops-next", "auto-status", "events", "status", "ps", "requests", "request-sweep", "sessions", "drift", "suggest", "remediate", "bridge-status", "bridge-recover", "bridge-profiles", "bridge-preset-save", "bridge-preset-apply", "bridge-preset-show", "bridge-preset-delete", "bridge-presets", "bridge-profile-show", "bridge-profile-delete", "request-approve", "request-close", "request-escalate", "request-resolve", "quickstart", "up", "down", "restart-team"):
         path = bin_dir / f"agentcodehandoff-{kind}"
         if path.exists() and not force:
             wrappers.append(path)
@@ -1611,6 +1613,58 @@ def _message_summary_line(message: dict[str, Any], width: int) -> str:
     summary = str(message.get("summary", "")).strip() or "(no summary)"
     text = f"{sender}->{recipient} [{role}] {summary}"
     return _truncate(text, width)
+
+
+def _event_entries(home: Path, inbox_path: Path, agents: list[str] | None = None) -> list[dict[str, Any]]:
+    selected = agents or _default_agents()
+    messages = _read_messages(inbox_path)
+    entries: list[dict[str, Any]] = []
+
+    for message in messages:
+        sender = str(message.get("from", "")).strip()
+        recipient = str(message.get("to", "")).strip()
+        if selected and sender not in selected and recipient not in selected:
+            continue
+        timestamp = _parse_iso(str(message.get("timestamp", "")).strip())
+        if timestamp is None:
+            continue
+        role = str(message.get("role", "")).strip() or "handoff"
+        summary = str(message.get("summary", "")).strip() or "(no summary)"
+        entries.append(
+            {
+                "timestamp": timestamp,
+                "kind": "message",
+                "agent": sender or "?",
+                "label": f"{sender or '?'} -> {recipient or '?'} [{role}]",
+                "summary": summary,
+                "detail": str(message.get("details", "")).strip(),
+            }
+        )
+
+    for agent in selected:
+        lock = _read_bridge_lock(_bridge_lock_path(home, agent))
+        recent_events = lock.get("recent_events", [])
+        if not isinstance(recent_events, list):
+            continue
+        for event in recent_events:
+            if not isinstance(event, dict):
+                continue
+            timestamp = _parse_iso(str(event.get("timestamp", "")).strip())
+            if timestamp is None:
+                continue
+            entries.append(
+                {
+                    "timestamp": timestamp,
+                    "kind": "bridge",
+                    "agent": agent,
+                    "label": f"{agent} bridge [{str(event.get('type', '')).strip() or 'event'}]",
+                    "summary": str(event.get("summary", "")).strip() or "(no summary)",
+                    "detail": str(event.get("detail", "")).strip(),
+                }
+            )
+
+    entries.sort(key=lambda item: item["timestamp"])
+    return entries
 
 
 def _claim_summary_line(claim: dict[str, Any], width: int) -> str:
@@ -2644,6 +2698,22 @@ def cmd_watch(args: argparse.Namespace) -> None:
                 seen.add(message_id)
                 _print_message(message)
         time.sleep(args.interval)
+
+
+def cmd_events(args: argparse.Namespace) -> None:
+    entries = _event_entries(args.home, args.inbox_path, args.agents)
+    if not entries:
+        print("no recent events")
+        return
+    for entry in entries[-args.limit:]:
+        timestamp = entry.get("timestamp")
+        timestamp_text = _format_timestamp(timestamp.isoformat()) if isinstance(timestamp, datetime) else "--:--:--"
+        print(f"[{timestamp_text}] {entry.get('label', '')}")
+        print(f"  {entry.get('summary', '')}")
+        detail = str(entry.get("detail", "")).strip()
+        if detail:
+            print(f"  {detail}")
+        print()
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -4528,6 +4598,11 @@ def build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument("--agent", help="filter messages by agent name")
     read_parser.add_argument("--limit", type=int, default=20)
     read_parser.set_defaults(func=cmd_read)
+
+    events_parser = subparsers.add_parser("events", help="show a recent timeline of bridge and message activity")
+    events_parser.add_argument("--agents", nargs="+", default=_default_agents())
+    events_parser.add_argument("--limit", type=int, default=20)
+    events_parser.set_defaults(func=cmd_events)
 
     latest_parser = subparsers.add_parser("latest", help="show newest matching message")
     latest_parser.add_argument("--agent", help="filter messages by agent name")

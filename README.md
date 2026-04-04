@@ -385,6 +385,7 @@ Keys:
 Inspect supervised bridge health:
 
 ```bash
+agentcodehandoff events --limit 20
 agentcodehandoff ps
 agentcodehandoff bridge-status
 agentcodehandoff logs --agents claude --lines 40
@@ -691,6 +692,7 @@ agentcodehandoff doctor
 agentcodehandoff read --agent codex
 agentcodehandoff watch --agent hermes
 agentcodehandoff latest --agent hermes
+agentcodehandoff events
 agentcodehandoff status
 agentcodehandoff auto-status
 agentcodehandoff dashboard
@@ -735,6 +737,7 @@ The current suite covers:
 - bridge startup validation for missing agent CLIs and non-git repos
 - stale lock cleanup and paused-bridge recovery from saved profiles
 - restart-cap pause behavior for supervised bridges
+- merged bridge/message timeline via `events`
 - per-agent bridge log access
 - compact per-agent team summaries with `ps`
 - supervised `local-trio` startup plus an actual Claude bridge reply in an isolated temp repo
@@ -759,6 +762,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 
 - `agentcodehandoff-dashboard`
 - `agentcodehandoff-auto-status`
+- `agentcodehandoff-events`
 - `agentcodehandoff-status`
 - `agentcodehandoff-sessions`
 - `agentcodehandoff-drift`
