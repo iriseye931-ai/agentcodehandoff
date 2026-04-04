@@ -652,16 +652,19 @@ python3 -m unittest discover -s tests -v
 
 The current suite covers:
 
-- `init` and `doctor` against isolated fake Codex, Hermes, and Claude CLIs
+- `init` and `doctor` against isolated fake Codex, Hermes, Claude, and OpenClaw CLIs
 - availability overrides and routing fallback
 - bridge preset persistence for `local-trio`
+- bridge preset persistence for `local-squad`
 - bridge startup validation for missing agent CLIs and non-git repos
 - stale lock cleanup and paused-bridge recovery from saved profiles
 - restart-cap pause behavior for supervised bridges
 - per-agent bridge log access
 - compact per-agent team summaries with `ps`
 - supervised `local-trio` startup plus an actual Claude bridge reply in an isolated temp repo
+- supervised `local-squad` startup with OpenClaw included in the team health path
 - tracked request resolution
+- golden-path `quickstart` onboarding
 
 This is the current release-hardening baseline. Before a broad public release, the suite should continue to grow around deeper drift/remediation flows and additional long-running provider/runtime behaviors.
 
