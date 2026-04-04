@@ -4,14 +4,14 @@ Use these after the initial launch to highlight the recovery path for people aff
 
 ## X Follow-Up
 
-If `Claude Code + Hermes + Codex` is your local stack, `AgentCodeHandoff` now has a real recovery path built in:
+If `Claude Code + Hermes + Codex` is your installed stack, `AgentCodeHandoff` now has a real recovery path built in:
 
 - `agentcodehandoff quickstart --template local-trio --repo /path/to/repo`
 - `agentcodehandoff agent-check --agent claude --repo /path/to/repo`
 - `agentcodehandoff agent-check --agent hermes --repo /path/to/repo`
 
 Why this matters:
-- Claude can stay in the mix without a third-party harness model
+- Claude Code can stay in the mix without a third-party harness model
 - Hermes issues now show the real provider/model/endpoint that timed out
 - Claude issues now show the real bridge-runtime login mismatch
 
@@ -46,7 +46,7 @@ There is also now a concrete recovery walkthrough in the repo:
 https://github.com/iriseye931-ai/agentcodehandoff/blob/main/examples/recovery.md
 
 The goal remains the same:
-- bring your own local agents
-- keep Claude in the mix
-- keep everything local
+- bring your own installed and configured agent tools
+- keep Claude Code in the mix
+- keep everything in your environment
 - coordinate them through one control plane instead of a hosted harness

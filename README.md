@@ -16,7 +16,7 @@
 
 `agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, supervised bridge processes, workflow-state updates, and a durable local record of who is doing what.
 
-It is intentionally a coordination layer, not a hosted model provider. You bring your own local agent CLIs and auth state. AgentCodeHandoff handles the collaboration.
+It is intentionally a coordination layer, not a hosted model provider. You bring your own installed and configured agent tools. AgentCodeHandoff handles the collaboration.
 
 ## Try This Now
 
@@ -88,9 +88,10 @@ For the four-agent setup, see [examples/local-squad-recovery.md](examples/local-
 
 If you still want Claude Code in the mix, but cannot rely on a third-party harness model anymore, this is the intended setup:
 
-- run your own local `claude`
-- run your own local `codex`, `hermes`, and optionally `openclaw`
-- let `AgentCodeHandoff` coordinate them locally
+- run your own installed `claude` CLI
+- run your own installed `codex` CLI
+- run your own configured `hermes` and optionally `openclaw` agent runtimes
+- let `AgentCodeHandoff` coordinate them in your environment
 
 Start here:
 
@@ -166,11 +167,11 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 AgentCodeHandoff follows a bring-your-own-agent model:
 
-- you install and authenticate Codex, Claude Code, Hermes, OpenClaw, or other local agent CLIs yourself
-- AgentCodeHandoff launches those local CLIs as workers
-- credentials stay with the local runtime of those tools
+- for subscription-backed tools like `codex` and `claude`, you use your own installed and authenticated CLIs in your environment
+- for harness-style tools like `hermes` and `openclaw`, you use your own configured runtimes, providers, and local setup
+- AgentCodeHandoff launches and coordinates those tools; it does not provide the underlying subscriptions, providers, or models
 
-This repo is designed for local orchestration of user-controlled agent runtimes. It is not designed to proxy or resell third-party subscription access through a hosted service.
+This repo is designed for orchestration of user-controlled agent runtimes. It is not designed to proxy or resell third-party subscription access through a hosted service.
 
 ## What It Includes
 
@@ -279,11 +280,11 @@ That keeps the tool lightweight, local, and practical for real engineering workf
 
 ### Is this a hosted harness for Claude or other agent subscriptions?
 
-No. AgentCodeHandoff is a local coordination layer. You run your own local agent CLIs and keep auth in those tools. AgentCodeHandoff coordinates them.
+No. AgentCodeHandoff is a coordination layer. You run your own installed agent tools and keep auth or provider setup in those tools. AgentCodeHandoff coordinates them.
 
 ### Is this useful if I am affected by stricter Claude policy around third-party harnesses?
 
-Yes. The intended model is not "Claude runs everything for you through a third-party service." The intended model is "Claude is one local agent in a team, and AgentCodeHandoff coordinates it with Codex, Hermes, OpenClaw, or other local agents."
+Yes. The intended model is not "Claude runs everything for you through a third-party service." The intended model is "Claude Code is one installed agent tool in a team, and AgentCodeHandoff coordinates it with Codex, Hermes, OpenClaw, or other agent tools in your environment."
 
 ### Does OpenClaw work here?
 
@@ -291,7 +292,7 @@ Yes, OpenClaw is now a first-class supported agent in the tool. It is included i
 
 ### Do I need to pay API costs through AgentCodeHandoff?
 
-No. This is a bring-your-own-agent tool. You use whatever local CLIs, plans, or providers you already use. AgentCodeHandoff is the coordination layer, not the provider.
+No. This is a bring-your-own-agent tool. You use whatever installed CLIs, harnesses, plans, or providers you already use. AgentCodeHandoff is the coordination layer, not the provider.
 
 ### What is the fastest way to see it working?
 

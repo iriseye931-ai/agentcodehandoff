@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentcodehandoff"
 version = "0.1.0"
-description = "Local-first bring-your-own-agent control plane for coding agents with handoffs, supervision, routing, and recovery."
+description = "Local-first control plane for installed and configured coding agent tools with handoffs, supervision, routing, and recovery."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
