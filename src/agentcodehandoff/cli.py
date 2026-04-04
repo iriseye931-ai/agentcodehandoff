@@ -204,6 +204,13 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _agent_runtime_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
+    env.pop("CODEX_SANDBOX", None)
+    return env
+
+
 def _automation_state_path(home: Path, agent: str) -> Path:
     return home / "automation" / f"{agent}.json"
 
@@ -892,6 +899,7 @@ def _run_hermes_auto(prompt: str, repo: Path) -> dict[str, Any]:
             prompt,
         ],
         cwd=repo,
+        env=_agent_runtime_env(),
         capture_output=True,
         text=True,
         check=False,
@@ -957,6 +965,7 @@ def _run_claude_auto(prompt: str, repo: Path) -> dict[str, Any]:
             prompt,
         ],
         cwd=repo,
+        env=_agent_runtime_env(),
         capture_output=True,
         text=True,
         check=False,
@@ -1020,6 +1029,7 @@ def _run_openclaw_auto(prompt: str, repo: Path) -> dict[str, Any]:
             prompt,
         ],
         cwd=repo,
+        env=_agent_runtime_env(),
         capture_output=True,
         text=True,
         check=False,
@@ -1822,6 +1832,7 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
     heartbeat = _parse_iso(str(lock.get("last_heartbeat_at", "")).strip())
     now = datetime.now(timezone.utc)
     healthy = supervisor_alive and alive and heartbeat is not None and (now - heartbeat).total_seconds() <= BRIDGE_HEARTBEAT_SECONDS
+    stale = supervisor_alive and alive and not healthy
     automation_state = _read_automation_state(_automation_state_path(home, agent))
     seen_ids = {str(item) for item in automation_state.get("seen_ids", []) if str(item).strip()}
     pending = _pending_messages_for_agent(_read_messages(inbox_path), agent, seen_ids)
@@ -1838,6 +1849,7 @@ def _supervised_bridge_status(home: Path, inbox_path: Path, agent: str) -> dict[
         "alive": alive,
         "supervisor_alive": supervisor_alive,
         "healthy": healthy,
+        "stale": stale,
         "lock": lock,
         "pending_count": len(pending),
         "pending_buckets": pending_buckets,
@@ -1860,6 +1872,7 @@ def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     pid = int(status.get("pid", 0) or 0)
     supervisor_pid = int(status.get("lock", {}).get("supervisor_pid", 0) or 0) if isinstance(status.get("lock"), dict) else 0
     healthy = bool(status.get("healthy"))
+    stale = bool(status.get("stale"))
     paused = bool(status.get("lock", {}).get("paused", False)) if isinstance(status.get("lock"), dict) else False
     pending_count = int(status.get("pending_count", 0) or 0)
     pending_buckets = status.get("pending_buckets", {}) if isinstance(status.get("pending_buckets"), dict) else {}
@@ -1867,7 +1880,7 @@ def _bridge_supervision_line(status: dict[str, Any], width: int) -> str:
     auto_sweep = bool(status.get("auto_sweep"))
     heartbeat = _parse_iso(str(status.get("lock", {}).get("last_heartbeat_at", "")).strip()) if isinstance(status.get("lock"), dict) else None
     heartbeat_text = _format_timestamp(heartbeat.isoformat()) if heartbeat else "--:--:--"
-    state = "healthy" if healthy else "paused" if paused else "down"
+    state = "healthy" if healthy else "paused" if paused else "stale" if stale else "down"
     sweep_text = " | sweep" if auto_sweep else ""
     bucket_text = f"f{int(pending_buckets.get('fresh', 0) or 0)}/w{int(pending_buckets.get('warm', 0) or 0)}/s{int(pending_buckets.get('stale', 0) or 0)}"
     return _truncate(f"{agent}: {state} | supervisor {supervisor_pid or '-'} | bridge {pid or '-'} | pending {pending_count} ({bucket_text}) | hb {heartbeat_text} | restarts {restart_count}{sweep_text}", width)

@@ -246,6 +246,30 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("OK    claude CLI ready", doctor.stdout)
         self.assertIn("OK    openclaw CLI ready", doctor.stdout)
 
+    def test_agent_runtime_env_drops_codex_sandbox_flags(self) -> None:
+        with mock.patch.dict(os.environ, {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt"}, clear=False):
+            env = ach_cli._agent_runtime_env()
+        self.assertNotIn("CODEX_SANDBOX_NETWORK_DISABLED", env)
+        self.assertNotIn("CODEX_SANDBOX", env)
+
+    def test_claude_runner_uses_clean_runtime_env(self) -> None:
+        payload = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": {"summary": "ok", "details": "fine", "files": []},
+        }
+
+        def fake_run(*args, **kwargs):
+            self.assertNotIn("CODEX_SANDBOX_NETWORK_DISABLED", kwargs.get("env", {}))
+            self.assertNotIn("CODEX_SANDBOX", kwargs.get("env", {}))
+            return subprocess.CompletedProcess(args[0], 0, stdout=json.dumps(payload), stderr="")
+
+        with mock.patch.dict(os.environ, {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt"}, clear=False):
+            with mock.patch("agentcodehandoff.cli.subprocess.run", side_effect=fake_run):
+                result = ach_cli._run_claude_auto("Return JSON only.", self.repo)
+        self.assertEqual(result["summary"], "ok")
+
     def test_doctor_shows_actionable_cli_hint(self) -> None:
         init = run_cli(["init", "--bin-dir", str(self.bin_dir)], env=self.env)
         self.assertEqual(init.returncode, 0, init.stderr)
@@ -433,6 +457,26 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("failure class: auth", result.stdout)
         self.assertIn("hint: Re-authenticate the local claude CLI", result.stdout)
+
+    def test_bridge_status_shows_stale_when_processes_alive_but_heartbeat_old(self) -> None:
+        self.write_bridge_profile("hermes", repo=self.repo)
+        self.write_bridge_lock(
+            "hermes",
+            {
+                "agent": "hermes",
+                "pid": 111,
+                "supervisor_pid": 222,
+                "repo": str(self.repo),
+                "paused": False,
+                "last_heartbeat_at": "2000-01-01T00:00:00+00:00",
+            },
+        )
+        with mock.patch("agentcodehandoff.cli._pid_alive", return_value=True):
+            status = ach_cli._supervised_bridge_status(self.home, self.home / "inbox.jsonl", "hermes")
+        self.assertTrue(status["stale"])
+        self.assertFalse(status["healthy"])
+        line = ach_cli._bridge_supervision_line(status, 160)
+        self.assertIn("hermes: stale", line)
 
     def test_events_merges_messages_and_bridge_events(self) -> None:
         init = run_cli(["init"], env=self.env)
