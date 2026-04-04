@@ -6,6 +6,7 @@
 - added built-in `local-squad` preset for Codex, Hermes, Claude, and OpenClaw
 - added `quickstart` as the golden-path onboarding command
 - added a first-use architecture diagram and clearer first-5-minutes docs
+- added guided example docs for first-use and local-squad workflows
 - added `ps` for compact per-agent team summaries
 - added `logs` for per-agent bridge log inspection
 - improved operator diagnostics in `ops`

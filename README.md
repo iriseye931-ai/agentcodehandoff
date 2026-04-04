@@ -131,6 +131,12 @@ agentcodehandoff request \
   --files README.md
 ```
 
+Guided examples:
+
+- [First 5 Minutes](examples/first-5-minutes.md)
+- [Supervised Bridge Workflow](examples/supervised-bridge-workflow.md)
+- [Local Squad Workflow](examples/local-squad-workflow.md)
+
 ## Public Alpha Verification
 
 The current build has been verified against the real local toolchain, not just isolated tests.

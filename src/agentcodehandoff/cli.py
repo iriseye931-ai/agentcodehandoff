@@ -3703,6 +3703,9 @@ def cmd_up(args: argparse.Namespace) -> None:
 
 
 def cmd_quickstart(args: argparse.Namespace) -> None:
+    template = str(args.template).strip() or "local-trio"
+    sample_to_agent = "openclaw" if template == "local-squad" else "hermes"
+
     init_args = argparse.Namespace(
         home=args.home,
         inbox_path=args.inbox_path,
@@ -3747,7 +3750,13 @@ def cmd_quickstart(args: argparse.Namespace) -> None:
     print(f"  agentcodehandoff dashboard --view ops --interactive")
     print(f"  agentcodehandoff ps")
     print(f"  agentcodehandoff requests")
-    print(f"  agentcodehandoff request --from-agent codex --to-agent hermes --summary \"Need help\" --details \"Reply automatically with a short acknowledgement.\" --files README.md")
+    if args.start_team:
+        print(
+            f"  agentcodehandoff request --from-agent codex --to-agent {sample_to_agent} "
+            f"--summary \"Need help\" --details \"Reply automatically with a short acknowledgement.\" --files README.md"
+        )
+    else:
+        print(f"  agentcodehandoff up --template {template} --repo {args.repo}")
 
 
 def cmd_down(args: argparse.Namespace) -> None:

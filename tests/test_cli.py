@@ -258,6 +258,16 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("started claude bridge", result.stdout)
         self.assertIn("next:", result.stdout)
 
+    def test_quickstart_local_squad_mentions_openclaw(self) -> None:
+        result = run_cli(
+            ["quickstart", "--template", "local-squad", "--repo", str(self.repo), "--bin-dir", str(self.bin_dir)],
+            env=self.env,
+            cwd=self.repo,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("started openclaw bridge", result.stdout)
+        self.assertIn("--to-agent openclaw", result.stdout)
+
     def test_route_respects_availability_override(self) -> None:
         init = run_cli(["init"], env=self.env)
         self.assertEqual(init.returncode, 0, init.stderr)
