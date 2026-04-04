@@ -120,6 +120,24 @@ def create_fake_agent_bin(bin_dir: Path) -> None:
         ),
     )
 
+    write_executable(
+        bin_dir / "openclaw",
+        common_header
+        + textwrap.dedent(
+            """
+            args = sys.argv[1:]
+            if args == ["--version"]:
+                print("openclaw 0.0-test")
+                raise SystemExit(0)
+            if args[:2] == ["agent", "--json"] and "--message" in args:
+                prompt = args[args.index("--message") + 1]
+                print(json.dumps({"reply": f"openclaw handled: {prompt[:60]}"}))
+                raise SystemExit(0)
+            print("openclaw test stub")
+            """
+        ),
+    )
+
 
 def read_inbox(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -226,6 +244,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("OK    codex CLI ready", doctor.stdout)
         self.assertIn("OK    hermes CLI ready", doctor.stdout)
         self.assertIn("OK    claude CLI ready", doctor.stdout)
+        self.assertIn("OK    openclaw CLI ready", doctor.stdout)
 
     def test_route_respects_availability_override(self) -> None:
         init = run_cli(["init"], env=self.env)
@@ -258,6 +277,25 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("claude: applied preset local-trio", apply.stdout)
 
         for agent in ("codex", "hermes", "claude"):
+            profile_path = self.home / "bridges" / f"{agent}.profile.json"
+            self.assertTrue(profile_path.exists(), profile_path.as_posix())
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["repo"], str(self.repo))
+            self.assertIn("updated_at", profile)
+
+    def test_bridge_preset_apply_persists_local_squad_profiles(self) -> None:
+        init = run_cli(["init"], env=self.env)
+        self.assertEqual(init.returncode, 0, init.stderr)
+
+        apply = run_cli(
+            ["bridge-preset-apply", "--name", "local-squad", "--repo", str(self.repo)],
+            env=self.env,
+            cwd=self.repo,
+        )
+        self.assertEqual(apply.returncode, 0, apply.stdout + apply.stderr)
+        self.assertIn("openclaw: applied preset local-squad", apply.stdout)
+
+        for agent in ("codex", "hermes", "claude", "openclaw"):
             profile_path = self.home / "bridges" / f"{agent}.profile.json"
             self.assertTrue(profile_path.exists(), profile_path.as_posix())
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -450,6 +488,16 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         requests = run_cli(["requests"], env=self.env, cwd=self.repo)
         self.assertEqual(requests.returncode, 0, requests.stdout + requests.stderr)
         self.assertIn("Test request", requests.stdout)
+
+    def test_local_squad_starts_and_reports_healthy(self) -> None:
+        init = run_cli(["init", "--install-wrappers", "--seed", "--bin-dir", str(self.bin_dir)], env=self.env)
+        self.assertEqual(init.returncode, 0, init.stderr)
+
+        up = run_cli(["up", "--template", "local-squad", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
+        self.assertEqual(up.returncode, 0, up.stdout + up.stderr)
+        self.assertIn("started openclaw bridge", up.stdout)
+        bridge_output = self.wait_for_all_bridge_health(["codex", "hermes", "claude", "openclaw"])
+        self.assertIn("openclaw: healthy", bridge_output)
 
     def test_request_resolve_appends_linked_outcome(self) -> None:
         init = run_cli(["init"], env=self.env)

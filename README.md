@@ -5,7 +5,7 @@
 <p align="center"><strong>Local control plane for bring-your-own coding agents.</strong></p>
 
 <p align="center">
-  <em>A local-first shared handoff, supervision, and ops layer for Codex, Claude Code, Hermes, and other terminal agents.</em>
+  <em>A local-first shared handoff, supervision, and ops layer for Codex, Claude Code, Hermes, OpenClaw, and other terminal agents.</em>
 </p>
 
 `agentcodehandoff` gives multiple coding agents one coordination layer inside a shared repo: clear handoffs, explicit ownership, supervised bridge processes, workflow-state updates, and a durable local record of who is doing what.
@@ -15,6 +15,7 @@ It is intentionally a coordination layer, not a hosted model provider. You bring
 It is built for teams running:
 
 - Codex + Claude + Hermes
+- Codex + Claude + Hermes + OpenClaw
 - two or more agent terminals on one machine
 - one shared codebase
 - a zero-infrastructure workflow
@@ -22,6 +23,7 @@ It is built for teams running:
 It now supports:
 
 - 3-agent supervised team startup with `local-trio`
+- 4-agent supervised team startup with `local-squad`
 - availability-aware routing and graceful fallback when one agent is rate-limited or offline
 - interactive terminal ops for recovery, sweeping, and request resolution
 - live-verified Claude bridge replies via structured JSON output
@@ -43,7 +45,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 ## What This Is
 
-- A local-first coordination layer for Codex, Claude Code, Hermes, and similar terminal agents
+- A local-first coordination layer for Codex, Claude Code, Hermes, OpenClaw, and similar terminal agents
 - A shared handoff, routing, supervision, and recovery system that runs on your machine
 - A way to make already-installed agents collaborate inside one repo without constant human relaying
 
@@ -58,7 +60,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 AgentCodeHandoff follows a bring-your-own-agent model:
 
-- you install and authenticate Codex, Claude Code, Hermes, or other local agent CLIs yourself
+- you install and authenticate Codex, Claude Code, Hermes, OpenClaw, or other local agent CLIs yourself
 - AgentCodeHandoff launches those local CLIs as workers
 - credentials stay with the local runtime of those tools
 
@@ -89,6 +91,7 @@ This repo is designed for local orchestration of user-controlled agent runtimes.
 This repo is no longer just a shared inbox prototype. The current build supports:
 
 - local pair and local trio presets
+- local squad preset with OpenClaw support
 - supervised `up` / `down` / `restart-team` lifecycle commands
 - persistent bridge recovery profiles
 - interactive operator controls from the terminal dashboard
@@ -114,6 +117,8 @@ Observed live replies:
   - `ACK: Public release live verification task received`
 
 That confirms the public-alpha story is accurate: this tool can bring up a real local trio, coordinate requests, and receive actual bridge-written replies through the shared collaboration layer.
+
+OpenClaw is now supported as a first-class agent in the tool, including wrappers, routing, supervision, and presets. Live OpenClaw replies still depend on OpenClaw's own gateway and agent configuration in the local runtime.
 
 ## Positioning
 
@@ -177,6 +182,7 @@ For manually managed auto-reply bridges, start them in real terminals:
 agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-claude-auto --repo /Users/iris/Projects/agent-inbox
+agentcodehandoff-openclaw-auto --repo /Users/iris/Projects/agent-inbox
 ```
 
 Enable automatic file claims from bridge replies:
@@ -204,6 +210,7 @@ For day-to-day supervised operation, prefer managed background bridges instead o
 agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent openclaw --repo /path/to/repo --auto-sweep
 ```
 
 Or apply the built-in trio preset in one step:
@@ -212,10 +219,17 @@ Or apply the built-in trio preset in one step:
 agentcodehandoff bridge-preset-apply --name local-trio --repo /path/to/repo --start
 ```
 
+Or bring up the built-in four-agent preset:
+
+```bash
+agentcodehandoff bridge-preset-apply --name local-squad --repo /path/to/repo --start
+```
+
 Or use the higher-level team lifecycle commands:
 
 ```bash
 agentcodehandoff up --template local-trio --repo /path/to/repo
+agentcodehandoff up --template local-squad --repo /path/to/repo
 agentcodehandoff down --template local-trio --repo /path/to/repo
 agentcodehandoff restart-team --template local-trio --repo /path/to/repo
 ```
@@ -637,33 +651,43 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-claude-watch`
+- `agentcodehandoff-openclaw-watch`
 - `agentcodehandoff-codex-read`
 - `agentcodehandoff-hermes-read`
 - `agentcodehandoff-claude-read`
+- `agentcodehandoff-openclaw-read`
 - `agentcodehandoff-codex-auto`
 - `agentcodehandoff-hermes-auto`
 - `agentcodehandoff-claude-auto`
+- `agentcodehandoff-openclaw-auto`
 - `agentcodehandoff-codex-send`
 - `agentcodehandoff-hermes-send`
 - `agentcodehandoff-claude-send`
+- `agentcodehandoff-openclaw-send`
 - `agentcodehandoff-codex-request`
 - `agentcodehandoff-hermes-request`
 - `agentcodehandoff-claude-request`
+- `agentcodehandoff-openclaw-request`
 - `agentcodehandoff-codex-claim`
 - `agentcodehandoff-hermes-claim`
 - `agentcodehandoff-claude-claim`
+- `agentcodehandoff-openclaw-claim`
 - `agentcodehandoff-codex-done`
 - `agentcodehandoff-hermes-done`
 - `agentcodehandoff-claude-done`
+- `agentcodehandoff-openclaw-done`
 - `agentcodehandoff-codex-blocked`
 - `agentcodehandoff-hermes-blocked`
 - `agentcodehandoff-claude-blocked`
+- `agentcodehandoff-openclaw-blocked`
 - `agentcodehandoff-codex-review`
 - `agentcodehandoff-hermes-review`
 - `agentcodehandoff-claude-review`
+- `agentcodehandoff-openclaw-review`
 - `agentcodehandoff-codex-release`
 - `agentcodehandoff-hermes-release`
 - `agentcodehandoff-claude-release`
+- `agentcodehandoff-openclaw-release`
 
 ## Typical Workflow
 
@@ -732,6 +756,7 @@ agentcodehandoff session-end --agent codex --scope parser-pass
 - `hermes` uses `hermes chat -Q -q`
 - `codex` uses `codex --sandbox read-only exec`
 - `claude` uses `claude -p`
+- `openclaw` uses `openclaw agent --json --agent main`
 
 Example:
 
@@ -753,6 +778,7 @@ agentcodehandoff-hermes-auto \
 Notes:
 
 - `claude` requires a valid Claude Code CLI login in the shell environment where the bridge runs.
+- `openclaw` requires OpenClaw itself to be configured well enough for `openclaw agent --json --agent main` to complete in the local runtime where the bridge runs.
 - smart routing automatically deprioritizes agents with auth, rate-limit, or paused bridge failures when supervision state is available.
 
 - this works only in a real terminal environment where Hermes and Codex can reach their providers
@@ -786,10 +812,12 @@ agentcodehandoff bridge-status
 
 ## Smart Routing
 
-`agentcodehandoff route` scores a request for Codex vs Hermes:
+`agentcodehandoff route` scores a request across the supported local agents:
 
 - Hermes is preferred for docs, copy, README, install, review, and UX-oriented work
 - Codex is preferred for bugs, tests, refactors, CLI/code changes, and build/debug work
+- Claude is preferred for architecture, planning, tradeoffs, and ambiguous deep-review work
+- OpenClaw is preferred for memory, research, integrations, logs, and ops-oriented work
 
 Examples:
 
@@ -820,7 +848,7 @@ agentcodehandoff dispatch \
 - Python: `3.10+`
 - Operating model: local-first, terminal-first
 - Repo type: local git repositories
-- Agent CLIs: Codex, Claude, and Hermes are the primary supported agents today
+- Agent CLIs: Codex, Claude, Hermes, and OpenClaw are the primary supported agents today
 - Platform expectation: Unix-like environments with `git`, `python3`, and standard process semantics
 
 ### Runtime model

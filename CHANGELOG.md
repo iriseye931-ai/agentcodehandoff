@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- added OpenClaw as a first-class supported agent
+- added built-in `local-squad` preset for Codex, Hermes, Claude, and OpenClaw
 - added `ps` for compact per-agent team summaries
 - added `logs` for per-agent bridge log inspection
 - improved operator diagnostics in `ops`

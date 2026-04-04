@@ -38,7 +38,7 @@ REQUEST_STALE_SECONDS = 300
 REQUEST_ESCALATE_SECONDS = 900
 BRIDGE_EVENT_HISTORY = 8
 BRIDGE_COOL_OFF_SECONDS = 300
-SUPPORTED_AGENTS = ("codex", "hermes", "claude")
+SUPPORTED_AGENTS = ("codex", "hermes", "claude", "openclaw")
 DEFAULT_ROUTE_AGENT = "codex"
 AGENT_ROUTING_PROFILES: dict[str, dict[str, Any]] = {
     "codex": {
@@ -94,6 +94,22 @@ AGENT_ROUTING_PROFILES: dict[str, dict[str, Any]] = {
             "migration": 3,
         },
         "file_tokens": ["architecture", "design", "plan"],
+        "file_bonus": 2,
+    },
+    "openclaw": {
+        "keywords": {
+            "search": 4,
+            "research": 4,
+            "memory": 5,
+            "context": 4,
+            "ops": 4,
+            "automation": 3,
+            "integration": 4,
+            "incident": 3,
+            "monitor": 3,
+            "logs": 3,
+        },
+        "file_tokens": ["ops", "integration", "research", "memory"],
         "file_bonus": 2,
     },
 }
@@ -342,6 +358,8 @@ def _template_agent_settings(agent: str, repo: Path) -> dict[str, Any]:
         base["claim_on_files"] = True
     if agent == "claude":
         base["interval"] = 3.0
+    if agent == "openclaw":
+        base["interval"] = 3.0
     return base
 
 
@@ -362,6 +380,16 @@ def _built_in_templates(repo: Path) -> dict[str, dict[str, Any]]:
                 "codex": _template_agent_settings("codex", repo),
                 "hermes": _template_agent_settings("hermes", repo),
                 "claude": _template_agent_settings("claude", repo),
+            },
+        },
+        "local-squad": {
+            "name": "local-squad",
+            "description": "Codex, Hermes, Claude, and OpenClaw local collaboration defaults",
+            "agents": {
+                "codex": _template_agent_settings("codex", repo),
+                "hermes": _template_agent_settings("hermes", repo),
+                "claude": _template_agent_settings("claude", repo),
+                "openclaw": _template_agent_settings("openclaw", repo),
             },
         },
     }
@@ -878,6 +906,64 @@ def _run_claude_auto(prompt: str, repo: Path) -> dict[str, Any]:
     return parsed
 
 
+def _coerce_openclaw_payload(payload: dict[str, Any], prompt: str) -> dict[str, Any] | None:
+    if all(key in payload for key in ("summary", "details", "files")):
+        files = payload.get("files")
+        if isinstance(files, list):
+            return {
+                "summary": str(payload.get("summary", "")).strip(),
+                "details": str(payload.get("details", "")).strip(),
+                "files": [str(item) for item in files],
+            }
+    for key in ("reply", "message", "text", "output"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return {
+                "summary": "OpenClaw response",
+                "details": value.strip(),
+                "files": ["README.md"] if "README.md" in prompt else [],
+            }
+    nested = payload.get("response")
+    if isinstance(nested, dict):
+        for key in ("text", "message", "reply"):
+            value = nested.get(key)
+            if isinstance(value, str) and value.strip():
+                return {
+                    "summary": "OpenClaw response",
+                    "details": value.strip(),
+                    "files": ["README.md"] if "README.md" in prompt else [],
+                }
+    return None
+
+
+def _run_openclaw_auto(prompt: str, repo: Path) -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            str(shutil.which("openclaw") or "/opt/homebrew/bin/openclaw"),
+            "agent",
+            "--json",
+            "--agent",
+            "main",
+            "--message",
+            prompt,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = ((result.stdout or "").strip() + ("\n" + (result.stderr or "").strip() if result.stderr else "")).strip()
+    if result.returncode != 0:
+        raise RuntimeError(f"openclaw automation failed: {combined[:500]}")
+    payload = _extract_json_object(combined)
+    if not payload:
+        raise RuntimeError(f"openclaw automation did not return JSON: {combined[:500]}")
+    parsed = _coerce_openclaw_payload(payload, prompt)
+    if not parsed:
+        raise RuntimeError(f"openclaw automation returned unsupported JSON: {combined[:500]}")
+    return parsed
+
+
 def _run_auto_agent(agent: str, prompt: str, repo: Path) -> dict[str, Any]:
     if agent == "hermes":
         return _run_hermes_auto(prompt, repo)
@@ -885,6 +971,8 @@ def _run_auto_agent(agent: str, prompt: str, repo: Path) -> dict[str, Any]:
         return _run_codex_auto(prompt, repo)
     if agent == "claude":
         return _run_claude_auto(prompt, repo)
+    if agent == "openclaw":
+        return _run_openclaw_auto(prompt, repo)
     raise ValueError(f"unsupported auto agent: {agent}")
 
 
@@ -1432,6 +1520,8 @@ def _agent_cli_health(agent: str) -> tuple[bool, str]:
         if agent == "codex":
             result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
         elif agent == "claude":
+            result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
+        elif agent == "openclaw":
             result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
         elif agent == "hermes":
             result = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False, timeout=10)
