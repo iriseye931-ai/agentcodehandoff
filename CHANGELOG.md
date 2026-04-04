@@ -8,6 +8,8 @@
 - added restart-cap supervision coverage
 - added startup validation for invalid repos and missing agent CLIs
 - added public release docs, support matrix, and contributing guide
+- clarified bring-your-own-agent positioning and local authentication model
+- completed a real public-alpha trio verification with Codex, Hermes, and Claude
 
 ## 0.1.0-alpha
 
@@ -33,3 +35,4 @@ Quality baseline:
 - critical-path automated regression suite
 - documented limitations
 - release checklist
+- live local trio verification through supervised bridges

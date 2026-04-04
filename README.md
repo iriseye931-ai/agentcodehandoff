@@ -95,6 +95,26 @@ This repo is no longer just a shared inbox prototype. The current build supports
 - explicit availability overrides for rate-limited or offline agents
 - live trio verification with Codex, Hermes, and Claude
 
+## Public Alpha Verification
+
+The current build has been verified against the real local toolchain, not just isolated tests.
+
+Live verification completed with:
+
+- `agentcodehandoff up --template local-trio`
+- real supervised bridges for Codex, Hermes, and Claude
+- real requests sent through AgentCodeHandoff into the shared inbox
+- real automatic replies written back by Hermes and Claude
+
+Observed live replies:
+
+- `hermes -> codex`
+  - `Acknowledged public release verification`
+- `claude -> codex`
+  - `ACK: Public release live verification task received`
+
+That confirms the public-alpha story is accurate: this tool can bring up a real local trio, coordinate requests, and receive actual bridge-written replies through the shared collaboration layer.
+
 ## Positioning
 
 The product story is intentionally simple:
