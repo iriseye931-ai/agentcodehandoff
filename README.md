@@ -59,6 +59,28 @@ Common first-run fixes:
 - `agentcodehandoff logs --agents claude --lines 40` if Claude is installed but not replying
 - `agentcodehandoff logs --agents openclaw --lines 40` if OpenClaw is installed but not configured
 
+## Recovery
+
+If `quickstart` or `up --template local-trio` does not get you to a healthy trio, run the agent-specific checks directly:
+
+```bash
+agentcodehandoff agent-check --agent claude --repo /path/to/repo
+agentcodehandoff agent-check --agent hermes --repo /path/to/repo
+```
+
+What they tell you:
+
+- `claude`:
+  checks the real bridge invocation path and catches the common mismatch where `claude auth status` in one shell looks fine but the supervised bridge runtime is not actually logged in
+- `hermes`:
+  shows whether Hermes can reach its configured provider path and, on failure, reports the provider, model, and endpoint that timed out
+
+If either one fails, fix that agent first and rerun:
+
+```bash
+agentcodehandoff quickstart --template local-trio --repo /path/to/repo
+```
+
 ## Affected By The Claude Harness Policy?
 
 If you still want Claude Code in the mix, but cannot rely on a third-party harness model anymore, this is the intended setup:
