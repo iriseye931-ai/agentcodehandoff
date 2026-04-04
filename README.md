@@ -82,6 +82,7 @@ agentcodehandoff quickstart --template local-trio --repo /path/to/repo
 ```
 
 For a concrete end-to-end example with real Claude and Hermes failure outputs, see [examples/recovery.md](examples/recovery.md).
+For the four-agent setup, see [examples/local-squad-recovery.md](examples/local-squad-recovery.md).
 
 ## Affected By The Claude Harness Policy?
 

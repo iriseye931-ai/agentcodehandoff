@@ -1788,6 +1788,23 @@ def _agent_check_prompt(agent: str) -> str:
     return "Return JSON only with summary \"ok\", details \"bridge path ok\", and files []."
 
 
+def _recommended_agent_command(agent: str, repo: Path, failure_detail: str = "") -> str:
+    detail = failure_detail.lower()
+    if agent == "claude":
+        if "loggedin" in detail or "not logged in" in detail or "authmethod" in detail:
+            return "claude auth login"
+        return f"agentcodehandoff bridge-recover --agents claude --force"
+    if agent == "hermes":
+        if "endpoint=" in detail or "provider=" in detail or "timed out" in detail or "connection error" in detail:
+            return f"agentcodehandoff agent-check --agent hermes --repo {repo}"
+        return f"agentcodehandoff bridge-recover --agents hermes --force"
+    if agent == "openclaw":
+        return "openclaw agent --json --agent main --message 'hello'"
+    if agent == "codex":
+        return f"agentcodehandoff bridge-recover --agents codex --force"
+    return f"agentcodehandoff bridge-recover --agents {agent} --force"
+
+
 def _validate_bridge_repo(repo: Path) -> str | None:
     repo = Path(repo).expanduser()
     if not repo.exists():
@@ -4672,6 +4689,7 @@ def cmd_agent_check(args: argparse.Namespace) -> None:
     _print_check("OK" if cli_ok else "FAIL", f"{args.agent} CLI ready", cli_detail)
     if not cli_ok:
         print(f"      hint: {_failure_hint(args.agent, '', cli_detail)}")
+        print(f"      next: {_recommended_agent_command(args.agent, args.repo, cli_detail)}")
         raise SystemExit(1)
 
     runtime_health = _agent_runtime_health(args.agent, args.repo)
@@ -4680,6 +4698,7 @@ def cmd_agent_check(args: argparse.Namespace) -> None:
         _print_check("OK" if runtime_ok else "FAIL", f"{args.agent} runtime ready", _summarize_error(runtime_detail, 220))
         if not runtime_ok:
             print(f"      hint: {_failure_hint(args.agent, '', runtime_detail)}")
+            print(f"      next: {_recommended_agent_command(args.agent, args.repo, runtime_detail)}")
             raise SystemExit(1)
 
     try:
@@ -4688,6 +4707,7 @@ def cmd_agent_check(args: argparse.Namespace) -> None:
         detail = str(exc)
         _print_check("FAIL", f"{args.agent} bridge invocation", _summarize_error(detail, 220))
         print(f"      hint: {_failure_hint(args.agent, _classify_error(detail), detail)}")
+        print(f"      next: {_recommended_agent_command(args.agent, args.repo, detail)}")
         raise SystemExit(1)
 
     _print_check("OK", f"{args.agent} bridge invocation", _summarize_error(json.dumps(result, ensure_ascii=True), 220))
