@@ -995,13 +995,21 @@ Current non-goals:
 - remote multi-machine coordination
 - GUI-first workflows
 
-## Roadmap
+## Public Alpha Roadmap
 
-- interactive TUI
-- file change awareness
-- repo-aware claim suggestions
+Near-term priorities:
+
+- tighter onboarding based on real user feedback
+- deeper OpenClaw live verification and setup guidance
+- richer interactive ops actions in the terminal dashboard
+- clearer request and bridge event history
+- more regression coverage for long-running supervision behavior
+
+Likely future work:
+
+- richer TUI flows
 - notifications
-- optional HTTP/WebSocket relay
+- optional relay modes that preserve the local-first model
 
 ## Release Checklist
 
