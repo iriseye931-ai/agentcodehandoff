@@ -1,8 +1,7 @@
 # Local Squad Recovery
 
-Use this when you want the full four-agent setup:
+Use this when you want the full three-agent setup:
 
-- Codex
 - Hermes
 - Claude
 - OpenClaw

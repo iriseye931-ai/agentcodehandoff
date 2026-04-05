@@ -5,7 +5,7 @@ This example is a copy-paste checklist for the managed bridge flow.
 It assumes:
 
 - one shared repo
-- Codex and Claude/Hermes running in separate terminals
+- Claude and Hermes running in separate terminals
 - `agentcodehandoff` already installed
 
 ## 1. Verify local state
@@ -18,15 +18,15 @@ agentcodehandoff status
 ## 2. Start supervised bridges
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
 ```
 
 Optional tuning:
 
 ```bash
 agentcodehandoff bridge-start \
-  --agent codex \
+  --agent hermes \
   --repo /path/to/repo \
   --auto-sweep \
   --sweep-interval 30 \
@@ -49,7 +49,7 @@ Use it for:
 ## 4. Send real collaboration messages
 
 ```bash
-agentcodehandoff-codex-request \
+agentcodehandoff-claude-request \
   --summary "Review the onboarding docs" \
   --details "Own README polish only and reply with suggested wording." \
   --files "README.md"
@@ -57,7 +57,7 @@ agentcodehandoff-codex-request \
 
 ```bash
 agentcodehandoff dispatch \
-  --from-agent codex \
+  --from-agent claude \
   --summary "Fix the failing CLI parser test" \
   --details "Route this to the best agent automatically and expect a reply." \
   --files "tests/test_cli.py,src/agentcodehandoff/cli.py"
@@ -88,8 +88,8 @@ agentcodehandoff bridge-recover --fail-if-idle
 ## 7. Fall back to manual auto terminals if needed
 
 ```bash
-agentcodehandoff-codex-auto --repo /path/to/repo
 agentcodehandoff-hermes-auto --repo /path/to/repo
+agentcodehandoff-claude-auto --repo /path/to/repo
 ```
 
 That fallback is useful when:

@@ -4,8 +4,8 @@ This example is for the collaborator terminal after the primary agent has alread
 
 Use it when:
 
-- Codex already started supervised bridges
-- you are the Claude/Hermes-like second terminal
+- the primary agent already started supervised bridges
+- you are the second terminal joining the team
 - you want to inspect bridge health before taking work
 
 ## 1. Watch the inbox and workflow stream

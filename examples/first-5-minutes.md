@@ -33,7 +33,7 @@ Keep this terminal open.
 
 ```bash
 agentcodehandoff request \
-  --from-agent codex \
+  --from-agent claude \
   --to-agent hermes \
   --summary "Need help" \
   --details "Reply automatically with a short acknowledgement." \

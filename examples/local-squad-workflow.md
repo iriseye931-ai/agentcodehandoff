@@ -1,8 +1,7 @@
 # Local Squad Workflow
 
-Use this when you want all four supported agents in one local team:
+Use this when you want all three supported agents in one local team:
 
-- Codex
 - Hermes
 - Claude Code
 - OpenClaw
@@ -33,11 +32,11 @@ agentcodehandoff dashboard --view ops --interactive
 
 ## 4. Send targeted work
 
-Example: Codex asks OpenClaw for an ops/research-oriented reply.
+Example: Claude asks OpenClaw for an ops/research-oriented reply.
 
 ```bash
 agentcodehandoff request \
-  --from-agent codex \
+  --from-agent claude \
   --to-agent openclaw \
   --summary "Need context" \
   --details "Reply with a short ops-oriented acknowledgement." \
@@ -48,7 +47,7 @@ Example: use smart routing for mixed work:
 
 ```bash
 agentcodehandoff dispatch \
-  --from-agent codex \
+  --from-agent claude \
   --summary "Investigate integration behavior" \
   --details "Route this to the best local agent automatically." \
   --files src/agentcodehandoff/cli.py,README.md

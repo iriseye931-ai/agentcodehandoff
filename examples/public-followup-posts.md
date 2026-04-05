@@ -4,7 +4,7 @@ Use these after the initial launch to highlight the recovery path for people aff
 
 ## X Follow-Up
 
-If `Claude Code + Hermes + Codex` is your installed stack, `AgentCodeHandoff` now has a real recovery path built in:
+If `Claude Code + Hermes + OpenClaw` is your installed stack, `AgentCodeHandoff` now has a real recovery path built in:
 
 - `agentcodehandoff quickstart --template local-trio --repo /path/to/repo`
 - `agentcodehandoff agent-check --agent claude --repo /path/to/repo`
@@ -26,7 +26,6 @@ https://github.com/iriseye931-ai/agentcodehandoff
 One of the most important improvements to `AgentCodeHandoff` after launch has been recovery.
 
 If you are trying to keep a local team like:
-- Codex
 - Claude Code
 - Hermes
 - optionally OpenClaw

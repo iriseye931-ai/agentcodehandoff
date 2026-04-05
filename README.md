@@ -5,7 +5,7 @@
 <p align="center"><strong>Local control plane for bring-your-own coding agents.</strong></p>
 
 <p align="center">
-  <em>A local-first shared handoff, supervision, and ops layer for Codex, Claude Code, Hermes, OpenClaw, and other terminal agents.</em>
+  <em>A local-first shared handoff, supervision, and ops layer for Claude Code, Hermes, OpenClaw, and other terminal agents.</em>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Then send one real request:
 
 ```bash
 agentcodehandoff request \
-  --from-agent codex \
+  --from-agent claude \
   --to-agent hermes \
   --summary "Need help" \
   --details "Reply automatically with a short acknowledgement." \
@@ -39,9 +39,9 @@ agentcodehandoff request \
 
 Choose your team:
 
-- `local-trio`: Codex + Hermes + Claude
-- `local-squad`: Codex + Hermes + Claude + OpenClaw
-- `local-pair`: Codex + Hermes
+- `local-trio`: Hermes + Claude + OpenClaw
+- `local-squad`: Hermes + Claude + OpenClaw
+- `local-pair`: Hermes + Claude
 
 If you want the four-agent setup:
 
@@ -89,7 +89,6 @@ For the four-agent setup, see [examples/local-squad-recovery.md](examples/local-
 If you still want Claude Code in the mix, but cannot rely on a third-party harness model anymore, this is the intended setup:
 
 - run your own installed `claude` CLI
-- run your own installed `codex` CLI
 - run your own configured `hermes` and optionally `openclaw` agent runtimes
 - let `AgentCodeHandoff` coordinate them in your environment
 
@@ -121,8 +120,8 @@ and use [examples/local-squad-recovery.md](examples/local-squad-recovery.md) as 
 
 It is built for teams running:
 
-- Codex + Claude + Hermes
-- Codex + Claude + Hermes + OpenClaw
+- Claude + Hermes
+- Claude + Hermes + OpenClaw
 - two or more agent terminals on one machine
 - one shared codebase
 - a zero-infrastructure workflow
@@ -152,7 +151,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 ## What This Is
 
-- A local-first coordination layer for Codex, Claude Code, Hermes, OpenClaw, and similar terminal agents
+- A local-first coordination layer for Claude Code, Hermes, OpenClaw, and similar terminal agents
 - A shared handoff, routing, supervision, and recovery system that runs on your machine
 - A way to make already-installed agents collaborate inside one repo without constant human relaying
 
@@ -167,7 +166,7 @@ Most multi-agent coding workflows break on coordination, not model quality:
 
 AgentCodeHandoff follows a bring-your-own-agent model:
 
-- for subscription-backed tools like `codex` and `claude`, you use your own installed and authenticated CLIs in your environment
+- for subscription-backed tools like `claude`, you use your own installed and authenticated CLI in your environment
 - for harness-style tools like `hermes` and `openclaw`, you use your own configured runtimes, providers, and local setup
 - AgentCodeHandoff launches and coordinates those tools; it does not provide the underlying subscriptions, providers, or models
 
@@ -177,7 +176,7 @@ This repo is designed for orchestration of user-controlled agent runtimes. It is
 
 - Shared inbox for agent-to-agent handoffs
 - Lightweight claim board for file and scope ownership
-- Availability-aware routing across Codex, Hermes, and Claude
+- Availability-aware routing across Hermes, Claude, and OpenClaw
 - Workflow updates for `request`, `done`, `blocked`, and `review`
 - Request lifecycle tracking with `acknowledged`, `done`, `blocked`, `review`, `closed`, `approved`, and `escalated`
 - Claim resolution with final states like `completed`, `blocked`, and `abandoned`
@@ -203,7 +202,7 @@ This repo is no longer just a shared inbox prototype. The current build supports
 - persistent bridge recovery profiles
 - interactive operator controls from the terminal dashboard
 - explicit availability overrides for rate-limited or offline agents
-- live trio verification with Codex, Hermes, and Claude
+- live trio verification with Hermes, Claude, and OpenClaw
 
 ## First 5 Minutes
 
@@ -231,7 +230,7 @@ And send one real request:
 
 ```bash
 agentcodehandoff request \
-  --from-agent codex \
+  --from-agent claude \
   --to-agent hermes \
   --summary "Need help" \
   --details "Reply automatically with a short acknowledgement." \
@@ -251,15 +250,15 @@ The current build has been verified against the real local toolchain, not just i
 Live verification completed with:
 
 - `agentcodehandoff up --template local-trio`
-- real supervised bridges for Codex, Hermes, and Claude
+- real supervised bridges for Hermes and Claude
 - real requests sent through AgentCodeHandoff into the shared inbox
 - real automatic replies written back by Hermes and Claude
 
 Observed live replies:
 
-- `hermes -> codex`
+- `hermes -> claude`
   - `Acknowledged public release verification`
-- `claude -> codex`
+- `claude -> hermes`
   - `ACK: Public release live verification task received`
 
 That confirms the public-alpha story is accurate: this tool can bring up a real local trio, coordinate requests, and receive actual bridge-written replies through the shared collaboration layer.
@@ -284,7 +283,7 @@ No. AgentCodeHandoff is a coordination layer. You run your own installed agent t
 
 ### Is this useful if I am affected by stricter Claude policy around third-party harnesses?
 
-Yes. The intended model is not "Claude runs everything for you through a third-party service." The intended model is "Claude Code is one installed agent tool in a team, and AgentCodeHandoff coordinates it with Codex, Hermes, OpenClaw, or other agent tools in your environment."
+Yes. The intended model is not "Claude runs everything for you through a third-party service." The intended model is "Claude Code is one installed agent tool in a team, and AgentCodeHandoff coordinates it with Hermes, OpenClaw, or other agent tools in your environment."
 
 ### Does OpenClaw work here?
 
@@ -351,7 +350,6 @@ agentcodehandoff status
 For a read-only observer setup, start two terminals:
 
 ```bash
-agentcodehandoff-codex-watch
 agentcodehandoff-hermes-watch
 agentcodehandoff-claude-watch
 ```
@@ -359,7 +357,6 @@ agentcodehandoff-claude-watch
 For manually managed auto-reply bridges, start them in real terminals:
 
 ```bash
-agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-claude-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-openclaw-auto --repo /Users/iris/Projects/agent-inbox
@@ -387,7 +384,6 @@ agentcodehandoff availability
 For day-to-day supervised operation, prefer managed background bridges instead of keeping separate reply terminals open:
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent openclaw --repo /path/to/repo --auto-sweep
@@ -414,7 +410,7 @@ agentcodehandoff down --template local-trio --repo /path/to/repo
 agentcodehandoff restart-team --template local-trio --repo /path/to/repo
 ```
 
-The `local-trio` flow has been live-verified with Codex, Hermes, and Claude replying through supervised bridges.
+The `local-trio` flow has been live-verified with Hermes, Claude, and OpenClaw replying through supervised bridges.
 
 ## Visuals
 
@@ -464,7 +460,7 @@ agentcodehandoff ops-next
 Send a handoff:
 
 ```bash
-agentcodehandoff-codex-send \
+agentcodehandoff-claude-send \
   --summary "Need a realism pass" \
   --details "Own MeshGraph.tsx only" \
   --files "frontend/src/components/MeshGraph.tsx"
@@ -473,7 +469,7 @@ agentcodehandoff-codex-send \
 Send an auto-reply request:
 
 ```bash
-agentcodehandoff-codex-request \
+agentcodehandoff-claude-request \
   --summary "Need a quick review" \
   --details "Reply automatically with short feedback." \
   --files "README.md"
@@ -483,7 +479,7 @@ Route a request automatically:
 
 ```bash
 agentcodehandoff dispatch \
-  --from-agent codex \
+  --from-agent claude \
   --summary "Fix failing CLI test" \
   --details "Investigate the parser behavior and send it to the best agent automatically." \
   --files "src/agentcodehandoff/cli.py,README.md"
@@ -501,7 +497,7 @@ agentcodehandoff-hermes-claim \
 Send a completion update:
 
 ```bash
-agentcodehandoff-codex-done \
+agentcodehandoff-claude-done \
   --summary "CLI workflow states shipped" \
   --details "done, blocked, review, and claim resolution are live." \
   --files "src/agentcodehandoff/cli.py,README.md"
@@ -519,7 +515,7 @@ agentcodehandoff-hermes-blocked \
 Request review:
 
 ```bash
-agentcodehandoff-codex-review \
+agentcodehandoff-claude-review \
   --summary "Review the dispatch heuristics" \
   --details "Check whether docs-heavy mixed tasks should route to Hermes." \
   --files "src/agentcodehandoff/cli.py,README.md"
@@ -529,7 +525,7 @@ Resolve a claim:
 
 ```bash
 agentcodehandoff resolve \
-  --agent codex \
+  --agent claude \
   --scope cli-workflow-pass \
   --status completed \
   --note "Merged and verified locally."
@@ -539,7 +535,7 @@ Start an isolated worktree session:
 
 ```bash
 agentcodehandoff session-start \
-  --agent codex \
+  --agent claude \
   --scope parser-pass \
   --repo /path/to/repo \
   --note "Isolated parser refactor worktree"
@@ -555,7 +551,7 @@ Close a session and remove its worktree:
 
 ```bash
 agentcodehandoff session-end \
-  --agent codex \
+  --agent claude \
   --scope parser-pass \
   --note "Merged and cleaned up"
 ```
@@ -594,7 +590,7 @@ agentcodehandoff request-sweep
 Let supervised bridges recover their own stale requests automatically:
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep --sweep-interval 30 --max-restarts 5
+agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep --sweep-interval 30 --max-restarts 5
 ```
 
 Recover paused or down bridges with one command:
@@ -605,7 +601,7 @@ agentcodehandoff bridge-recover
 
 Bridge recovery uses the last saved per-agent profile even after a full stop removes the live lock.
 
-## Recommended Onboarding For Codex + Claude/Hermes
+## Recommended Onboarding For Claude + Hermes
 
 This is the clearest path for two-agent collaboration in one shared repo.
 
@@ -619,8 +615,8 @@ agentcodehandoff doctor
 2. Start supervised bridges for each agent that should auto-reply.
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
 ```
 
 3. Keep one terminal on the ops dashboard.
@@ -648,8 +644,8 @@ agentcodehandoff bridge-recover
 7. If recovery is exhausted, fall back to manual auto terminals:
 
 ```bash
-agentcodehandoff-codex-auto --repo /path/to/repo
 agentcodehandoff-hermes-auto --repo /path/to/repo
+agentcodehandoff-claude-auto --repo /path/to/repo
 ```
 
 This gives a clean split:
@@ -665,8 +661,8 @@ Use this when you want the tool to keep automation alive without manual babysitt
 Start bridges:
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo --auto-sweep
 agentcodehandoff bridge-start --agent hermes --repo /path/to/repo --auto-sweep
+agentcodehandoff bridge-start --agent claude --repo /path/to/repo --auto-sweep
 ```
 
 Inspect health:
@@ -685,8 +681,8 @@ Common checks:
 Stop or restart a specific bridge:
 
 ```bash
-agentcodehandoff bridge-stop --agent codex
-agentcodehandoff bridge-restart --agent codex --repo /path/to/repo
+agentcodehandoff bridge-stop --agent hermes
+agentcodehandoff bridge-restart --agent hermes --repo /path/to/repo
 ```
 
 ## Profile Recovery Workflow
@@ -713,14 +709,14 @@ Use `bridge-recover --fail-if-idle` in scripts when you want a non-zero exit if 
 Inspect or delete a saved bridge profile:
 
 ```bash
-agentcodehandoff bridge-profile-show --agent codex
+agentcodehandoff bridge-profile-show --agent hermes
 agentcodehandoff bridge-profile-delete --agent hermes
 ```
 
 Save reusable bridge presets and apply them later:
 
 ```bash
-agentcodehandoff bridge-preset-save --name local-pair --agents codex hermes
+agentcodehandoff bridge-preset-save --name local-pair --agents hermes claude
 agentcodehandoff bridge-preset-apply --name local-pair --start
 ```
 
@@ -735,13 +731,13 @@ agentcodehandoff ops-next --apply --create-session
 Apply a safe remediation automatically:
 
 ```bash
-agentcodehandoff remediate --agent codex --scope parser-pass
+agentcodehandoff remediate --agent claude --scope parser-pass
 ```
 
 Create a new split scope and session when drift becomes separate work:
 
 ```bash
-agentcodehandoff remediate --agent codex --scope parser-pass --create-session
+agentcodehandoff remediate --agent claude --scope parser-pass --create-session
 ```
 
 ## Core Commands
@@ -749,7 +745,7 @@ agentcodehandoff remediate --agent codex --scope parser-pass --create-session
 ```bash
 agentcodehandoff init --install-wrappers --seed
 agentcodehandoff doctor
-agentcodehandoff read --agent codex
+agentcodehandoff read --agent claude
 agentcodehandoff watch --agent hermes
 agentcodehandoff latest --agent hermes
 agentcodehandoff events
@@ -765,9 +761,9 @@ agentcodehandoff drift
 agentcodehandoff suggest
 agentcodehandoff requests
 agentcodehandoff request-sweep
-agentcodehandoff remediate --agent codex --scope parser-pass
+agentcodehandoff remediate --agent claude --scope parser-pass
 agentcodehandoff bridge-status
-agentcodehandoff resolve --agent codex --scope cli-pass --status completed
+agentcodehandoff resolve --agent claude --scope cli-pass --status completed
 ```
 
 ## Demo
@@ -791,7 +787,7 @@ python3 -m unittest discover -s tests -v
 
 The current suite covers:
 
-- `init` and `doctor` against isolated fake Codex, Hermes, Claude, and OpenClaw CLIs
+- `init` and `doctor` against isolated fake Hermes, Claude, and OpenClaw CLIs
 - availability overrides and routing fallback
 - bridge preset persistence for `local-trio`
 - bridge preset persistence for `local-squad`
@@ -811,7 +807,7 @@ This is the current release-hardening baseline. Before a broad public release, t
 
 ## Known Limitations
 
-- Agent bridge behavior still depends on the local Codex, Claude, and Hermes CLIs being installed and authenticated in the environment that launches the bridge.
+- Agent bridge behavior still depends on the local Claude and Hermes CLIs being installed and authenticated in the environment that launches the bridge.
 - Public users should still expect local runtime/environment differences across agent CLIs, but `bridge-start` now fails early for invalid repos and missing agent CLIs instead of deferring that failure to a background process.
 - Real provider/runtime differences can still surface outside the isolated fake-agent test suite.
 - The dashboard is terminal-first and intentionally lightweight; it is not a full graphical control plane.
@@ -840,43 +836,33 @@ Installed by `agentcodehandoff init --install-wrappers`:
 - `agentcodehandoff-down`
 - `agentcodehandoff-restart-team`
 - `agentcodehandoff-bridge-status`
-- `agentcodehandoff-codex-watch`
 - `agentcodehandoff-hermes-watch`
 - `agentcodehandoff-claude-watch`
 - `agentcodehandoff-openclaw-watch`
-- `agentcodehandoff-codex-read`
 - `agentcodehandoff-hermes-read`
 - `agentcodehandoff-claude-read`
 - `agentcodehandoff-openclaw-read`
-- `agentcodehandoff-codex-auto`
 - `agentcodehandoff-hermes-auto`
 - `agentcodehandoff-claude-auto`
 - `agentcodehandoff-openclaw-auto`
-- `agentcodehandoff-codex-send`
 - `agentcodehandoff-hermes-send`
 - `agentcodehandoff-claude-send`
 - `agentcodehandoff-openclaw-send`
-- `agentcodehandoff-codex-request`
 - `agentcodehandoff-hermes-request`
 - `agentcodehandoff-claude-request`
 - `agentcodehandoff-openclaw-request`
-- `agentcodehandoff-codex-claim`
 - `agentcodehandoff-hermes-claim`
 - `agentcodehandoff-claude-claim`
 - `agentcodehandoff-openclaw-claim`
-- `agentcodehandoff-codex-done`
 - `agentcodehandoff-hermes-done`
 - `agentcodehandoff-claude-done`
 - `agentcodehandoff-openclaw-done`
-- `agentcodehandoff-codex-blocked`
 - `agentcodehandoff-hermes-blocked`
 - `agentcodehandoff-claude-blocked`
 - `agentcodehandoff-openclaw-blocked`
-- `agentcodehandoff-codex-review`
 - `agentcodehandoff-hermes-review`
 - `agentcodehandoff-claude-review`
 - `agentcodehandoff-openclaw-review`
-- `agentcodehandoff-codex-release`
 - `agentcodehandoff-hermes-release`
 - `agentcodehandoff-claude-release`
 - `agentcodehandoff-openclaw-release`
@@ -897,7 +883,7 @@ Installed by `agentcodehandoff init --install-wrappers`:
 
 It shows:
 
-- bridge health for Codex, Hermes, and Claude
+- bridge health for Hermes, Claude, and OpenClaw
 - latest handoffs
 - workflow events like `request`, `blocked`, `review`, and `done`
 - open claims
@@ -934,11 +920,11 @@ Default branch naming:
 Core commands:
 
 ```bash
-agentcodehandoff session-start --agent codex --scope parser-pass --repo /path/to/repo
+agentcodehandoff session-start --agent claude --scope parser-pass --repo /path/to/repo
 agentcodehandoff sessions
 agentcodehandoff drift
 agentcodehandoff suggest
-agentcodehandoff session-end --agent codex --scope parser-pass
+agentcodehandoff session-end --agent claude --scope parser-pass
 ```
 
 ## Auto Reply
@@ -946,7 +932,6 @@ agentcodehandoff session-end --agent codex --scope parser-pass
 `agentcodehandoff auto --agent <name>` watches the inbox and uses a local agent CLI to generate a JSON reply automatically.
 
 - `hermes` uses `hermes chat -Q -q`
-- `codex` uses `codex --sandbox read-only exec`
 - `claude` uses `claude -p`
 - `openclaw` uses `openclaw agent --json --agent main`
 
@@ -954,7 +939,6 @@ Example:
 
 ```bash
 agentcodehandoff-hermes-auto --repo /Users/iris/Projects/agent-inbox
-agentcodehandoff-codex-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff-claude-auto --repo /Users/iris/Projects/agent-inbox
 agentcodehandoff auto-status
 ```
@@ -973,7 +957,7 @@ Notes:
 - `openclaw` requires OpenClaw itself to be configured well enough for `openclaw agent --json --agent main` to complete in the local runtime where the bridge runs.
 - smart routing automatically deprioritizes agents with auth, rate-limit, or paused bridge failures when supervision state is available.
 
-- this works only in a real terminal environment where Hermes and Codex can reach their providers
+- this works only in a real terminal environment where Hermes and Claude can reach their providers
 - it is not expected to work inside a restricted offline sandbox
 - the auto bridge only replies to messages addressed to that agent
 - auto bridges only respond to `request`, `task`, and `auto-request` roles
@@ -996,9 +980,9 @@ What supervision adds:
 Core commands:
 
 ```bash
-agentcodehandoff bridge-start --agent codex --repo /path/to/repo
-agentcodehandoff bridge-stop --agent codex
-agentcodehandoff bridge-restart --agent codex --repo /path/to/repo
+agentcodehandoff bridge-start --agent hermes --repo /path/to/repo
+agentcodehandoff bridge-stop --agent hermes
+agentcodehandoff bridge-restart --agent hermes --repo /path/to/repo
 agentcodehandoff bridge-status
 ```
 
@@ -1007,7 +991,6 @@ agentcodehandoff bridge-status
 `agentcodehandoff route` scores a request across the supported local agents:
 
 - Hermes is preferred for docs, copy, README, install, review, and UX-oriented work
-- Codex is preferred for bugs, tests, refactors, CLI/code changes, and build/debug work
 - Claude is preferred for architecture, planning, tradeoffs, and ambiguous deep-review work
 - OpenClaw is preferred for memory, research, integrations, logs, and ops-oriented work
 
@@ -1022,7 +1005,7 @@ agentcodehandoff route \
 
 ```bash
 agentcodehandoff dispatch \
-  --from-agent codex \
+  --from-agent claude \
   --summary "Fix parser bug" \
   --details "Investigate failing CLI state handling and route to the best agent." \
   --files "src/agentcodehandoff/cli.py"
@@ -1040,7 +1023,7 @@ agentcodehandoff dispatch \
 - Python: `3.10+`
 - Operating model: local-first, terminal-first
 - Repo type: local git repositories
-- Agent CLIs: Codex, Claude, Hermes, and OpenClaw are the primary supported agents today
+- Agent CLIs: Claude, Hermes, and OpenClaw are the primary supported agents today
 - Platform expectation: Unix-like environments with `git`, `python3`, and standard process semantics
 
 ### Runtime model
@@ -1067,14 +1050,14 @@ Current non-goals:
 These are the setups we currently feel best about for public alpha use:
 
 - `local-pair`
-  - Codex + Hermes
+  - Hermes + Claude
   - strongest option for simple local collaboration with low setup friction
 - `local-trio`
-  - Codex + Hermes + Claude
+  - Hermes + Claude + OpenClaw
   - best validated multi-agent setup today
   - live-verified with supervised bridges and real replies
 - `local-squad`
-  - Codex + Hermes + Claude + OpenClaw
+  - Hermes + Claude + OpenClaw
   - fully integrated in the tool
   - best used when OpenClaw itself is already configured locally
 

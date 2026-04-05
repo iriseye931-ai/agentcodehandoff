@@ -39,28 +39,9 @@ REQUEST_STALE_SECONDS = 300
 REQUEST_ESCALATE_SECONDS = 900
 BRIDGE_EVENT_HISTORY = 8
 BRIDGE_COOL_OFF_SECONDS = 300
-SUPPORTED_AGENTS = ("codex", "hermes", "claude", "openclaw")
-DEFAULT_ROUTE_AGENT = "codex"
+SUPPORTED_AGENTS = ("hermes", "claude", "openclaw")
+DEFAULT_ROUTE_AGENT = "claude"
 AGENT_ROUTING_PROFILES: dict[str, dict[str, Any]] = {
-    "codex": {
-        "keywords": {
-            "bug": 4,
-            "fix": 4,
-            "test": 4,
-            "refactor": 4,
-            "cli": 3,
-            "build": 3,
-            "compile": 3,
-            "implementation": 3,
-            "code": 2,
-            "patch": 3,
-            "error": 3,
-            "stack trace": 4,
-            "performance": 3,
-        },
-        "file_tokens": [".py", ".ts", ".tsx", ".js", ".rs", ".go", ".sh"],
-        "file_bonus": 3,
-    },
     "hermes": {
         "keywords": {
             "readme": 4,
@@ -243,10 +224,7 @@ def _extract_hermes_runtime_context(text: str) -> str:
 
 
 def _agent_runtime_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
-    env.pop("CODEX_SANDBOX", None)
-    return env
+    return os.environ.copy()
 
 
 def _automation_state_path(home: Path, agent: str) -> Path:
@@ -412,26 +390,25 @@ def _built_in_templates(repo: Path) -> dict[str, dict[str, Any]]:
     return {
         "local-pair": {
             "name": "local-pair",
-            "description": "Codex and Hermes local collaboration defaults",
+            "description": "Hermes and Claude local collaboration defaults",
             "agents": {
-                "codex": _template_agent_settings("codex", repo),
-                "hermes": _template_agent_settings("hermes", repo),
-            },
-        },
-        "local-trio": {
-            "name": "local-trio",
-            "description": "Codex, Hermes, and Claude local collaboration defaults",
-            "agents": {
-                "codex": _template_agent_settings("codex", repo),
                 "hermes": _template_agent_settings("hermes", repo),
                 "claude": _template_agent_settings("claude", repo),
             },
         },
+        "local-trio": {
+            "name": "local-trio",
+            "description": "Hermes, Claude, and OpenClaw local collaboration defaults",
+            "agents": {
+                "hermes": _template_agent_settings("hermes", repo),
+                "claude": _template_agent_settings("claude", repo),
+                "openclaw": _template_agent_settings("openclaw", repo),
+            },
+        },
         "local-squad": {
             "name": "local-squad",
-            "description": "Codex, Hermes, Claude, and OpenClaw local collaboration defaults",
+            "description": "Hermes, Claude, and OpenClaw local collaboration defaults",
             "agents": {
-                "codex": _template_agent_settings("codex", repo),
                 "hermes": _template_agent_settings("hermes", repo),
                 "claude": _template_agent_settings("claude", repo),
                 "openclaw": _template_agent_settings("openclaw", repo),
@@ -1019,34 +996,6 @@ def _hermes_runtime_health(repo: Path) -> tuple[bool, str]:
     return False, summary
 
 
-def _run_codex_auto(prompt: str, repo: Path) -> dict[str, Any]:
-    output_path = DEFAULT_HOME / "automation" / "codex-last-response.txt"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            str(shutil.which("codex") or "/opt/homebrew/bin/codex"),
-            "--sandbox",
-            "read-only",
-            "exec",
-            "--skip-git-repo-check",
-            "-C",
-            str(repo),
-            "-o",
-            str(output_path),
-            "-",
-        ],
-        input=prompt,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    combined = (output_path.read_text(encoding="utf-8") if output_path.exists() else "") + "\n" + (result.stderr or "")
-    parsed = _extract_json_object(combined)
-    if not parsed:
-        raise RuntimeError(f"codex automation did not return JSON: {combined.strip()[:500]}")
-    return parsed
-
-
 def _run_claude_auto(prompt: str, repo: Path) -> dict[str, Any]:
     schema = {
         "type": "object",
@@ -1157,8 +1106,6 @@ def _run_openclaw_auto(prompt: str, repo: Path) -> dict[str, Any]:
 def _run_auto_agent(agent: str, prompt: str, repo: Path) -> dict[str, Any]:
     if agent == "hermes":
         return _run_hermes_auto(prompt, repo)
-    if agent == "codex":
-        return _run_codex_auto(prompt, repo)
     if agent == "claude":
         return _run_claude_auto(prompt, repo)
     if agent == "openclaw":
@@ -1749,9 +1696,7 @@ def _agent_cli_health(agent: str) -> tuple[bool, str]:
     if not binary:
         return False, "not found on PATH"
     try:
-        if agent == "codex":
-            result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
-        elif agent == "claude":
+        if agent == "claude":
             result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
         elif agent == "openclaw":
             result = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False, timeout=10)
@@ -1783,8 +1728,6 @@ def _agent_check_prompt(agent: str) -> str:
         return "Return JSON only with summary \"ok\", details \"hermes bridge path ok\", and files []."
     if agent == "openclaw":
         return "Return JSON only with summary \"ok\", details \"openclaw bridge path ok\", and files []."
-    if agent == "codex":
-        return "Return JSON only with summary \"ok\", details \"codex bridge path ok\", and files []."
     return "Return JSON only with summary \"ok\", details \"bridge path ok\", and files []."
 
 
@@ -1800,8 +1743,6 @@ def _recommended_agent_command(agent: str, repo: Path, failure_detail: str = "")
         return f"agentcodehandoff bridge-recover --agents hermes --force"
     if agent == "openclaw":
         return "openclaw agent --json --agent main --message 'hello'"
-    if agent == "codex":
-        return f"agentcodehandoff bridge-recover --agents codex --force"
     return f"agentcodehandoff bridge-recover --agents {agent} --force"
 
 
@@ -4128,7 +4069,7 @@ def cmd_quickstart(args: argparse.Namespace) -> None:
     print(f"  agentcodehandoff requests")
     if args.start_team:
         print(
-            f"  agentcodehandoff request --from-agent codex --to-agent {sample_to_agent} "
+            f"  agentcodehandoff request --from-agent claude --to-agent {sample_to_agent} "
             f"--summary \"Need help\" --details \"Reply automatically with a short acknowledgement.\" --files README.md"
         )
     else:

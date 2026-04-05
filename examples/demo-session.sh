@@ -11,9 +11,9 @@ echo "== init =="
 $CLI --home "$TMP_HOME" init --install-wrappers --seed --bin-dir "$BIN_DIR"
 
 echo
-echo "== codex claim =="
+echo "== claude claim =="
 $CLI --home "$TMP_HOME" claim \
-  --agent codex \
+  --agent claude \
   --scope ui-pass \
   --summary "Own the shell layout and visual polish" \
   --files "src/app.tsx,src/layout.tsx"
@@ -22,7 +22,7 @@ echo
 echo "== hermes request =="
 $CLI --home "$TMP_HOME" send \
   --from-agent hermes \
-  --to-agent codex \
+  --to-agent claude \
   --summary "Need README onboarding polish" \
   --details "Please tighten first-run docs and verify the supervised bridge steps." \
   --role request \
@@ -35,6 +35,6 @@ $CLI --home "$TMP_HOME" status
 echo
 echo "== next steps in a real repo =="
 echo "$CLI --home \"$TMP_HOME\" bridge-status"
-echo "$CLI --home \"$TMP_HOME\" bridge-profile-show --agent codex"
+echo "$CLI --home \"$TMP_HOME\" bridge-profile-show --agent claude"
 echo "$CLI --home \"$TMP_HOME\" dashboard --view ops"
 echo "$CLI --home \"$TMP_HOME\" bridge-recover"

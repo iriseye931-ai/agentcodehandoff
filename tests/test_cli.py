@@ -42,27 +42,6 @@ def create_fake_agent_bin(bin_dir: Path) -> None:
     common_header = "#!/usr/bin/env python3\nfrom __future__ import annotations\nimport json, os, sys\n"
 
     write_executable(
-        bin_dir / "codex",
-        common_header
-        + textwrap.dedent(
-            """
-            args = sys.argv[1:]
-            if args == ["--version"]:
-                print("codex 0.0-test")
-                raise SystemExit(0)
-            if "exec" in args and "-o" in args:
-                out_path = args[args.index("-o") + 1]
-                prompt = sys.stdin.read()
-                payload = {"summary": "codex reply", "details": prompt[:80], "files": []}
-                with open(out_path, "w", encoding="utf-8") as handle:
-                    handle.write(json.dumps(payload))
-                raise SystemExit(0)
-            print("codex test stub")
-            """
-        ),
-    )
-
-    write_executable(
         bin_dir / "hermes",
         common_header
         + textwrap.dedent(
@@ -246,7 +225,6 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertEqual(init.returncode, 0, init.stderr)
         doctor = run_cli(["doctor", "--bin-dir", str(self.bin_dir)], env=self.env)
         self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
-        self.assertIn("OK    codex CLI ready", doctor.stdout)
         self.assertIn("OK    hermes CLI ready", doctor.stdout)
         self.assertIn("OK    claude CLI ready", doctor.stdout)
         self.assertIn("OK    openclaw CLI ready", doctor.stdout)
@@ -260,13 +238,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertIn("OK    claude runtime ready", result.stdout)
         self.assertIn("OK    claude bridge invocation", result.stdout)
 
-    def test_agent_runtime_env_drops_codex_sandbox_flags(self) -> None:
-        with mock.patch.dict(os.environ, {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt"}, clear=False):
-            env = ach_cli._agent_runtime_env()
-        self.assertNotIn("CODEX_SANDBOX_NETWORK_DISABLED", env)
-        self.assertNotIn("CODEX_SANDBOX", env)
-
-    def test_claude_runner_uses_clean_runtime_env(self) -> None:
+    def test_claude_runner_returns_structured_output(self) -> None:
         payload = {
             "type": "result",
             "subtype": "success",
@@ -275,13 +247,10 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         }
 
         def fake_run(*args, **kwargs):
-            self.assertNotIn("CODEX_SANDBOX_NETWORK_DISABLED", kwargs.get("env", {}))
-            self.assertNotIn("CODEX_SANDBOX", kwargs.get("env", {}))
             return subprocess.CompletedProcess(args[0], 0, stdout=json.dumps(payload), stderr="")
 
-        with mock.patch.dict(os.environ, {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt"}, clear=False):
-            with mock.patch("agentcodehandoff.cli.subprocess.run", side_effect=fake_run):
-                result = ach_cli._run_claude_auto("Return JSON only.", self.repo)
+        with mock.patch("agentcodehandoff.cli.subprocess.run", side_effect=fake_run):
+            result = ach_cli._run_claude_auto("Return JSON only.", self.repo)
         self.assertEqual(result["summary"], "ok")
 
     def test_doctor_shows_actionable_cli_hint(self) -> None:
@@ -367,7 +336,6 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("home:", result.stdout)
-        self.assertIn("OK    codex CLI ready", result.stdout)
         self.assertIn("started claude bridge", result.stdout)
         self.assertIn("next:", result.stdout)
 
@@ -434,11 +402,10 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             cwd=self.repo,
         )
         self.assertEqual(apply.returncode, 0, apply.stdout + apply.stderr)
-        self.assertIn("codex: applied preset local-trio", apply.stdout)
         self.assertIn("hermes: applied preset local-trio", apply.stdout)
         self.assertIn("claude: applied preset local-trio", apply.stdout)
 
-        for agent in ("codex", "hermes", "claude"):
+        for agent in ("hermes", "claude"):
             profile_path = self.home / "bridges" / f"{agent}.profile.json"
             self.assertTrue(profile_path.exists(), profile_path.as_posix())
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -457,7 +424,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertEqual(apply.returncode, 0, apply.stdout + apply.stderr)
         self.assertIn("openclaw: applied preset local-squad", apply.stdout)
 
-        for agent in ("codex", "hermes", "claude", "openclaw"):
+        for agent in ("hermes", "claude", "openclaw"):
             profile_path = self.home / "bridges" / f"{agent}.profile.json"
             self.assertTrue(profile_path.exists(), profile_path.as_posix())
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -607,7 +574,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             [
                 "request",
                 "--from-agent",
-                "codex",
+                "hermes",
                 "--to-agent",
                 "claude",
                 "--summary",
@@ -621,10 +588,10 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             cwd=self.repo,
         )
         self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
-        result = run_cli(["events", "--agents", "claude", "codex", "--limit", "10"], env=self.env, cwd=self.repo)
+        result = run_cli(["events", "--agents", "claude", "hermes", "--limit", "10"], env=self.env, cwd=self.repo)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("claude bridge [paused]", result.stdout)
-        self.assertIn("codex -> claude [request]", result.stdout)
+        self.assertIn("hermes -> claude [request]", result.stdout)
         self.assertIn("Timeline test", result.stdout)
 
     def test_request_trace_prefers_latest_matching_request(self) -> None:
@@ -634,7 +601,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             [
                 "request",
                 "--from-agent",
-                "codex",
+                "claude",
                 "--to-agent",
                 "hermes",
                 "--summary",
@@ -652,7 +619,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             [
                 "request",
                 "--from-agent",
-                "codex",
+                "claude",
                 "--to-agent",
                 "hermes",
                 "--summary",
@@ -672,7 +639,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         ach_cli._send_record(
             inbox_path,
             from_agent="hermes",
-            to_agent="codex",
+            to_agent="claude",
             role="handoff",
             task="shared task",
             summary="Ack newer",
@@ -681,8 +648,8 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         )
         requests = run_cli(["requests", "--limit", "10"], env=self.env, cwd=self.repo)
         self.assertEqual(requests.returncode, 0, requests.stdout + requests.stderr)
-        self.assertIn("codex->hermes [pending] Older request", requests.stdout)
-        self.assertIn("codex->hermes [acknowledged] Newer request", requests.stdout)
+        self.assertIn("claude->hermes [pending] Older request", requests.stdout)
+        self.assertIn("claude->hermes [acknowledged] Newer request", requests.stdout)
         trace = run_cli(["request-trace", "--request-id", newer_request_id], env=self.env, cwd=self.repo)
         self.assertEqual(trace.returncode, 0, trace.stdout + trace.stderr)
         self.assertIn("Newer request", trace.stdout)
@@ -772,15 +739,14 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         up = run_cli(["up", "--template", "local-trio", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
         self.assertEqual(up.returncode, 0, up.stdout + up.stderr)
         self.assertIn("started claude bridge", up.stdout)
-        bridge_output = self.wait_for_all_bridge_health(["codex", "hermes", "claude"])
-        self.assertIn("codex: healthy", bridge_output)
+        bridge_output = self.wait_for_all_bridge_health(["hermes", "claude"])
         self.assertIn("hermes: healthy", bridge_output)
 
         request = run_cli(
             [
                 "request",
                 "--from-agent",
-                "codex",
+                "hermes",
                 "--to-agent",
                 "claude",
                 "--summary",
@@ -797,7 +763,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
 
         inbox_path = self.home / "inbox.jsonl"
         messages = read_inbox(inbox_path)
-        self.assertTrue(any(message.get("from") == "codex" and message.get("to") == "claude" for message in messages))
+        self.assertTrue(any(message.get("from") == "hermes" and message.get("to") == "claude" for message in messages))
 
         requests = run_cli(["requests"], env=self.env, cwd=self.repo)
         self.assertEqual(requests.returncode, 0, requests.stdout + requests.stderr)
@@ -810,7 +776,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         up = run_cli(["up", "--template", "local-squad", "--repo", str(self.repo)], env=self.env, cwd=self.repo)
         self.assertEqual(up.returncode, 0, up.stdout + up.stderr)
         self.assertIn("started openclaw bridge", up.stdout)
-        bridge_output = self.wait_for_all_bridge_health(["codex", "hermes", "claude", "openclaw"])
+        bridge_output = self.wait_for_all_bridge_health(["hermes", "claude", "openclaw"])
         self.assertIn("openclaw: healthy", bridge_output)
 
     def test_request_resolve_appends_linked_outcome(self) -> None:
@@ -821,7 +787,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
             [
                 "request",
                 "--from-agent",
-                "codex",
+                "hermes",
                 "--to-agent",
                 "claude",
                 "--summary",
@@ -853,7 +819,7 @@ class AgentCodeHandoffCLITests(unittest.TestCase):
         self.assertEqual(outcome["role"], "approved")
         self.assertEqual(outcome["request_id"], request_id)
         self.assertEqual(outcome["from"], "claude")
-        self.assertEqual(outcome["to"], "codex")
+        self.assertEqual(outcome["to"], "hermes")
 
         requests = run_cli(["requests"], env=self.env, cwd=self.repo)
         self.assertEqual(requests.returncode, 0, requests.stdout + requests.stderr)
